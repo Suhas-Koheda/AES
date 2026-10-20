@@ -12,3 +12,14 @@ experiment:
 data:
   max_answer_length: 317
   max_context_length: 192
+
+# Same 512-token budget as the concat baseline, so it fits at batch 16
+# without checkpointing; matching that baseline's batching keeps runtime and
+# optimisation comparable.
+model:
+  gradient_checkpointing: false
+
+train:
+  batch_size: 16
+  eval_batch_size: 32
+  grad_accumulation: 1

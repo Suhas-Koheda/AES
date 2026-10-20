@@ -183,7 +183,7 @@ drive.mount("/content/drive")
 | Symptom | Fix |
 |---|---|
 | `ModuleNotFoundError: sentencepiece` | `!pip install sentencepiece` (needed by the DeBERTa-v3 tokenizer) |
-| CUDA out of memory | reduce `train.batch_size`, increase `train.grad_accumulation`, or lower `data.max_context_length` |
+| CUDA out of memory | defaults already use gradient checkpointing + batch 8 for cross-attention; if it still OOMs, `--override train.batch_size=4 train.grad_accumulation=4 data.max_context_length=512` |
 | DataLoader worker errors | set `--override data.num_workers=0` |
 | `pdftotext not found` during setup | expected on Colab; source-text experiments are optional. `!apt-get -qq install -y poppler-utils` if you need them |
 | Test zip will not open | install `unzip`/`7z`; password is `asap2_test` |

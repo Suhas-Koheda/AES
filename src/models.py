@@ -157,7 +157,17 @@ class TransformerEncoder(nn.Module):
 
         if gradient_checkpointing:
             if hasattr(self.encoder, "gradient_checkpointing_enable"):
-                self.encoder.gradient_checkpointing_enable()
+                # Cached attention outputs are incompatible with checkpointing.
+                if getattr(self.encoder, "config", None) is not None:
+                    self.encoder.config.use_cache = False
+                try:
+                    # Non-reentrant checkpointing does not require the encoder
+                    # inputs to carry `requires_grad`.
+                    self.encoder.gradient_checkpointing_enable(
+                        gradient_checkpointing_kwargs={"use_reentrant": False}
+                    )
+                except TypeError:  # transformers < 4.36
+                    self.encoder.gradient_checkpointing_enable()
             else:  # pragma: no cover
                 logger.warning("Encoder does not support gradient checkpointing")
 

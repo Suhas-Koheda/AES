@@ -29,12 +29,18 @@ model:
   cross_attention_layers: 1
   share_encoder: true
   freeze_encoder: false
-  gradient_checkpointing: false
+  # Two encoder passes (answer 512 + context 768) need far more activation
+  # memory than the 512-token concat baseline. Checkpointing trades ~30%
+  # compute for roughly 3x lower activation memory, which keeps the model
+  # inside a 16 GB T4/P100.
+  gradient_checkpointing: true
 
 train:
   epochs: 4
-  batch_size: 16
-  eval_batch_size: 32
+  batch_size: 8
+  eval_batch_size: 8
+  # Preserve the original effective batch size of 16.
+  grad_accumulation: 2
   learning_rate: 2.0e-5
   class_weight: none
   objective: ce

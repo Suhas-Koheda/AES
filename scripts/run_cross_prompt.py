@@ -19,6 +19,7 @@ python scripts/run_cross_prompt.py --config configs/transformer.yaml \
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -26,6 +27,8 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from src.generalization import run_heldout_prompt_sweep  # noqa: E402
 from src.runner import run_experiment  # noqa: E402

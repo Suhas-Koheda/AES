@@ -27,6 +27,7 @@ stage header; completed stages can be skipped by passing ``--stages`` again.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -99,7 +100,11 @@ def main() -> None:
             flush=True,
         )
         try:
-            subprocess.run(cmd, check=True, cwd=ROOT)
+            env = os.environ.copy()
+            # Reduce allocator fragmentation when long sequences and two
+            # encoder passes leave large blocks of varying sizes.
+            env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+            subprocess.run(cmd, check=True, cwd=ROOT, env=env)
         except subprocess.CalledProcessError as exc:
             failed.append(stage)
             print(
