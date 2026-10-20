@@ -20,7 +20,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from .evaluate import predict, summarise
-from .utils import ensure_dir, get_logger, save_json, supports_amp
+from .utils import ensure_dir, get_logger, progress, save_json, supports_amp
 
 logger = get_logger()
 
@@ -210,7 +210,13 @@ class Trainer:
         started = time.perf_counter()
         self.optimizer.zero_grad(set_to_none=True)
 
-        for step, batch in enumerate(train_loader):
+        iterator = progress(
+            train_loader,
+            desc=f"train epoch {epoch + 1}/{self.epochs}",
+            unit="batch",
+            position=1,
+        )
+        for step, batch in enumerate(iterator):
             batch = {
                 k: v.to(self.device, non_blocking=True) if torch.is_tensor(v) else v
                 for k, v in batch.items()
@@ -248,6 +254,12 @@ class Trainer:
             running_loss += float(loss.detach()) * len(batch["labels"])
             seen += len(batch["labels"])
 
+            if hasattr(iterator, "set_postfix"):
+                iterator.set_postfix(
+                    loss=f"{running_loss / max(seen, 1):.4f}",
+                    lr=f"{self.optimizer.param_groups[0]['lr']:.1e}",
+                )
+
             if self.log_every and (step + 1) % self.log_every == 0:
                 lr = self.optimizer.param_groups[0]["lr"]
                 logger.info(
@@ -258,6 +270,9 @@ class Trainer:
                     running_loss / max(seen, 1),
                     lr,
                 )
+
+        if hasattr(iterator, "close"):
+            iterator.close()
 
         elapsed = time.perf_counter() - started
         result = {
@@ -280,6 +295,8 @@ class Trainer:
             head_type=self.head_type,
             decode_mode=self.decode_mode,
             use_amp=self.fp16,
+            desc=f"val epoch {epoch + 1}/{self.epochs}",
+            progress_position=1,
         )
         from .labels import NUM_CLASSES
         from .metrics import compute_metrics
@@ -298,6 +315,9 @@ class Trainer:
     # Fit
     # ------------------------------------------------------------------ #
     def fit(self, train_loader: DataLoader, val_loader: DataLoader, resume_from: Optional[str] = None) -> dict:
+        # AMP requires FP32 master weights. Some pretrained checkpoints are
+        # distributed in FP16, so normalise before moving to the GPU.
+        self.model.float()
         self.model.to(self.device)
         if resume_from:
             self.load_checkpoint(resume_from, train_loader)
@@ -308,7 +328,14 @@ class Trainer:
         history_path = self.out_dir / "history.json"
         csv_path = self.out_dir / "history.csv"
 
-        for epoch in range(self.start_epoch, self.epochs):
+        epoch_bar = progress(
+            range(self.start_epoch, self.epochs),
+            desc="epochs",
+            unit="epoch",
+            position=0,
+            leave=True,
+        )
+        for epoch in epoch_bar:
             train_metrics = self.train_epoch(train_loader, epoch)
             val_metrics = self.validate(val_loader, epoch)
             record = {
@@ -342,17 +369,30 @@ class Trainer:
             self.save_checkpoint(self.out_dir / f"checkpoint_epoch_{epoch}.pt", epoch)
             self._prune_checkpoints()
 
+            if hasattr(epoch_bar, "set_postfix"):
+                epoch_bar.set_postfix(
+                    best=f"{self.best_metric:.4f}",
+                    best_epoch=self.best_epoch,
+                )
+
             if (
                 self.early_stopping_patience is not None
                 and self.early_stopping_patience >= 0
                 and epochs_without_improvement >= self.early_stopping_patience
             ):
                 logger.info("Early stopping triggered at epoch %d", epoch)
+                if hasattr(epoch_bar, "update"):
+                    epoch_bar.update(1)
                 break
 
             if self.max_train_steps and self.global_step >= self.max_train_steps:
                 logger.info("Reached max_train_steps=%d; stopping", self.max_train_steps)
+                if hasattr(epoch_bar, "update"):
+                    epoch_bar.update(1)
                 break
+
+        if hasattr(epoch_bar, "close"):
+            epoch_bar.close()
 
         summary = {
             "best_metric": self.best_metric,

@@ -53,6 +53,7 @@ from .utils import (
     ensure_dir,
     get_device,
     get_logger,
+    progress,
     resolve_path,
     save_json,
     set_seed,
@@ -253,7 +254,12 @@ def run_tfidf(cfg: dict, root: Path, out_dir: Path) -> dict:
 
     best = None
     trials = []
-    for C in C_grid:
+    grid = progress(
+        C_grid,
+        desc=f"TF-IDF grid ({len(C_grid)} configs)",
+        unit="config",
+    )
+    for C in grid:
         scorer = TfidfEssayScorer(
             analyzer=model_cfg.get("analyzer", "word"),
             ngram_range=tuple(model_cfg.get("ngram_range", (1, 2))),
@@ -275,6 +281,11 @@ def run_tfidf(cfg: dict, root: Path, out_dir: Path) -> dict:
         logger.info("TF-IDF C=%.3f val QWK=%.4f MAE=%.4f", C, val_metrics["qwk"], val_metrics["mae"])
         if best is None or val_metrics["qwk"] > best[0]:
             best = (val_metrics["qwk"], scorer, float(C))
+        if hasattr(grid, "set_postfix"):
+            grid.set_postfix(best_qwk=f"{best[0]:.4f}", C=f"{float(C):.3f}")
+
+    if hasattr(grid, "close"):
+        grid.close()
 
     best_qwk, scorer, best_C = best
     scorer.save(str(out_dir / "tfidf_model.joblib"))
@@ -458,6 +469,7 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
             head_type=head_type,
             decode_mode=deep_get(cfg, "eval.decode_mode", "argmax"),
             use_amp=bool(deep_get(cfg, "train.fp16", True)),
+            desc=f"eval {split_name}",
         )
         metadata = df[[c for c in ["essay_id", "pubpriv"] + group_columns if c in df.columns]].copy()
         evaluation = evaluate_predictions(preds, metadata=metadata, group_columns=group_columns)

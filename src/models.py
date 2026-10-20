@@ -136,7 +136,22 @@ class TransformerEncoder(nn.Module):
         super().__init__()
         from transformers import AutoModel
 
-        self.encoder = AutoModel.from_pretrained(model_name, cache_dir=cache_dir)
+        # The released DeBERTa-v3 checkpoint stores FP16 weights. Loading them
+        # as-is leaves FP16 parameters, which AMP's GradScaler cannot unscale.
+        # Keep master weights in FP32; autocast handles the FP16 compute.
+        try:
+            self.encoder = AutoModel.from_pretrained(
+                model_name,
+                cache_dir=cache_dir,
+                dtype=torch.float32,
+            )
+        except TypeError:  # transformers < 4.56 spells it torch_dtype
+            self.encoder = AutoModel.from_pretrained(
+                model_name,
+                cache_dir=cache_dir,
+                torch_dtype=torch.float32,
+            )
+        self.encoder.float()
         self.hidden_size = int(self.encoder.config.hidden_size)
         self.model_name = model_name
 

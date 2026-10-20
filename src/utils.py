@@ -44,6 +44,24 @@ def get_logger() -> logging.Logger:
     return logging.getLogger(LOGGER_NAME)
 
 
+def progress(iterable, **kwargs):
+    """Wrap an iterable in a ``tqdm`` bar with elapsed/remaining-time estimates.
+
+    Falls back to the plain iterable when tqdm is unavailable or when
+    ``TQDM_DISABLE=1`` is set (useful for non-interactive logs).
+    """
+    disabled = os.environ.get("TQDM_DISABLE", "").lower() in {"1", "true", "yes"}
+    if disabled:
+        return iterable
+    try:
+        from tqdm import tqdm
+    except ImportError:  # pragma: no cover
+        return iterable
+    kwargs.setdefault("dynamic_ncols", True)
+    kwargs.setdefault("leave", False)
+    return tqdm(iterable, **kwargs)
+
+
 # --------------------------------------------------------------------------- #
 # Seeding / determinism
 # --------------------------------------------------------------------------- #

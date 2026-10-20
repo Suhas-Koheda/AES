@@ -12,7 +12,7 @@ import torch
 
 from .labels import NUM_CLASSES, decode_logits
 from .metrics import compute_metrics, group_metrics, to_plain_floats
-from .utils import ensure_dir, get_logger, save_json
+from .utils import ensure_dir, get_logger, progress, save_json
 
 logger = get_logger()
 
@@ -36,6 +36,8 @@ def predict(
     head_type: str = "softmax",
     decode_mode: str = "argmax",
     use_amp: bool = False,
+    desc: str = "inference",
+    progress_position: int = 0,
 ) -> dict:
     """Run inference and decode to classes/scores on the original 1..6 scale."""
     model.eval()
@@ -43,7 +45,10 @@ def predict(
     all_ids, all_prompts, all_n_chunks = [], [], []
 
     started = time.perf_counter()
-    for batch in dataloader:
+    iterator = progress(
+        dataloader, desc=desc, unit="batch", position=progress_position
+    )
+    for batch in iterator:
         batch = move_batch_to_device(batch, device)
         with torch.amp.autocast(
             device_type=device.type, enabled=use_amp and device.type == "cuda"
@@ -57,6 +62,10 @@ def predict(
         all_prompts.extend(batch["prompt_names"])
         if "n_chunks" in batch:
             all_n_chunks.extend(batch["n_chunks"].detach().cpu().tolist())
+        if hasattr(iterator, "set_postfix"):
+            iterator.set_postfix(samples=len(all_ids))
+    if hasattr(iterator, "close"):
+        iterator.close()
     elapsed = time.perf_counter() - started
 
     logits = np.concatenate(all_logits, axis=0)
