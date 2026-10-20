@@ -54,15 +54,19 @@ def test_verify_schema_duplicate_ids(synthetic_train_df):
 def test_fill_missing_assignment_from_prompt_level_text(synthetic_train_df):
     broken = synthetic_train_df.copy()
     prompt = "Prompt A"
-    expected = broken.loc[broken["prompt_name"] == prompt, "assignment"].iloc[0]
-    broken.loc[broken["prompt_name"] == prompt, "assignment"] = None
+    prompt_rows = broken.index[broken["prompt_name"] == prompt]
+    # Keep at least one row per prompt so the prompt-level text is available;
+    # the official files also retain non-null rows for every affected prompt.
+    missing_rows = prompt_rows[:-1]
+    expected = broken.loc[prompt_rows[0], "assignment"]
+    broken.loc[missing_rows, "assignment"] = None
     with pytest.raises(ValueError, match="null assignment"):
         verify_schema(broken, "broken")
 
     filled, n_filled = fill_missing_assignments(broken, "broken")
-    assert n_filled == int((broken["prompt_name"] == prompt).sum())
+    assert n_filled == len(missing_rows)
     assert filled["assignment"].isna().sum() == 0
-    assert (filled.loc[filled["prompt_name"] == prompt, "assignment"] == expected).all()
+    assert (filled.loc[prompt_rows, "assignment"] == expected).all()
     verify_schema(filled, "filled")
 
 

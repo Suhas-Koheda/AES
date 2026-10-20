@@ -48,10 +48,40 @@ are meaningless; success means the pipeline runs start to finish.
 
 ## 3. Training recipe
 
-Sequential, in this order (each stage writes its own `results/` directory):
+### One command for everything
+
+This is the recommended Colab cell. It runs the TF-IDF baseline first, then
+every neural model, ablation, held-out-prompt sweep, and the final tables:
 
 ```bash
-# 1. Cheap reference (no GPU needed, ~2-5 min)
+!python scripts/run_all.py
+```
+
+Add `--prepare` if the official corpus is not downloaded yet, and `--seeds` for
+multi-seed runs:
+
+```bash
+!python scripts/run_all.py --prepare --seeds 42 43 44
+```
+
+The exact order is: dataset inspection → TF-IDF → transformer concat →
+cross-attention → matched-budget cross-attention → CORAL → CE+expected →
+ablations → held-out prompts → report. Use `--override` to change
+hyperparameters for every training stage, e.g.:
+
+```bash
+!python scripts/run_all.py --override train.epochs=2 train.batch_size=8
+```
+
+If a stage fails, the script prints the remaining stages; resume with
+`--stages ...`.
+
+### Step by step
+
+Each stage writes its own `results/` directory:
+
+```bash
+# 1. Cheap reference (no GPU needed)
 !python scripts/run_baselines.py --only tfidf
 
 # 2. Transformer baseline (concatenation)
@@ -59,6 +89,9 @@ Sequential, in this order (each stage writes its own `results/` directory):
 
 # 3. Proposed cross-attention model
 !python scripts/run_from_config.py --config configs/cross_attention.yaml
+
+# 3b. Same token budget, cross-attention fusion
+!python scripts/run_from_config.py --config configs/cross_attention_matched.yaml
 
 # 4. Ordinal variants
 !python scripts/run_from_config.py --config configs/ordinal_coral.yaml
@@ -88,6 +121,8 @@ Each seed writes `results/03_cross_attention/seed_<n>/`; the aggregate is
 ```bash
 !python scripts/run_all.py --seeds 42 43 44
 ```
+
+This includes the TF-IDF baseline; you do not need to run it separately.
 
 ---
 

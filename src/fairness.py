@@ -76,8 +76,13 @@ def build_fairness_report(
 ) -> dict:
     """Compute subgroup metrics, score distributions and the worst errors."""
     frame = predictions_to_frame(preds)
-    merge_cols = ["essay_id"] + [c for c in metadata.columns if c != "essay_id"]
-    frame = frame.merge(metadata[merge_cols], on="essay_id", how="left")
+    # ``frame`` already contains ``prompt_name``; merging it again would produce
+    # prompt_name_x/prompt_name_y and break the per-prompt summary.
+    merge_cols = ["essay_id"] + [
+        c for c in metadata.columns if c != "essay_id" and c not in frame.columns
+    ]
+    if len(merge_cols) > 1:
+        frame = frame.merge(metadata[merge_cols], on="essay_id", how="left")
 
     report: dict = {
         "n": int(len(frame)),
@@ -118,6 +123,9 @@ def build_fairness_report(
 
 
 def _prompt_summary(frame: pd.DataFrame) -> Dict[str, dict]:
+    if "prompt_name" not in frame.columns:
+        logger.warning("prompt_name missing from predictions/metadata; skipping per-prompt summary")
+        return {}
     out = {}
     for prompt in sorted(frame["prompt_name"].unique()):
         mask = frame["prompt_name"] == prompt
