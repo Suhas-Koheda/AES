@@ -1,0 +1,7 @@
+# Question + rubric + answer using simple concatenation (ablation 3).
+# Same as configs/transformer.yaml; kept as a named ablation row.
+inherits: transformer.yaml
+
+experiment:
+  name: qra_concat
+  output_dir: results/abl_03_qra_concat

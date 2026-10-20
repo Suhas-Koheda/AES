@@ -1,0 +1,40 @@
+# Model C: rubric-conditioned cross-attention.
+#
+# Separate encoder passes for the answer and for question+rubric, so the full
+# rubric can be attended to without competing with essay tokens. The answer
+# representation is conditioned by multi-head cross-attention (Q=answer,
+# K=V=question+rubric) and combined with a gated residual.
+inherits: _base.yaml
+
+experiment:
+  name: cross_attention
+  output_dir: results/03_cross_attention
+  protocol: official
+  seed: 42
+
+data:
+  input_mode: qra_cross
+  max_answer_length: 512
+  max_context_length: 768
+  truncation: head_tail
+
+model:
+  name: cross_attention
+  pretrained_model: microsoft/deberta-v3-small
+  dropout: 0.1
+  pooling: attention
+  head_type: softmax
+  combine: gate
+  num_attention_heads: 8
+  cross_attention_layers: 1
+  share_encoder: true
+  freeze_encoder: false
+  gradient_checkpointing: false
+
+train:
+  epochs: 4
+  batch_size: 16
+  eval_batch_size: 32
+  learning_rate: 2.0e-5
+  class_weight: none
+  objective: ce

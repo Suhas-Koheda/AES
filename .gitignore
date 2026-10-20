@@ -1,0 +1,30 @@
+# --- Data (never commit raw corpus) ---
+data/*
+!data/.gitkeep
+*.zip
+*.docx
+
+# --- Results / checkpoints ---
+results/*
+!results/.gitkeep
+checkpoints/
+wandb/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# --- Misc ---
+.DS_Store
+*.log
+.ipynb_checkpoints/
+.env

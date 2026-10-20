@@ -1,0 +1,66 @@
+# Shared defaults. Every experiment config inherits from this file.
+#
+# Paths are relative to the repository root. Run `python scripts/prepare_data.py`
+# first to populate `data/asap2_raw/extracted/`.
+
+experiment:
+  protocol: official          # official | heldout_prompt
+  seed: 42
+  heldout_prompt: null
+
+data:
+  train_csv: data/asap2_raw/extracted/train/ASAP_2_Final_github_train.csv
+  test_csv: data/asap2_raw/extracted/test/ASAP_2_Final_github_test.csv
+  rubric_path: data/asap2_raw/extracted/rubric/asap_scoring_rubric.txt
+  source_texts_dir: data/asap2_raw/extracted/source_texts_txt
+  val_fraction: 0.15
+  num_workers: 2
+  include_source: false
+
+  # Input construction. `input_mode` is one of:
+  #   essay_only | qa_concat | qra_concat | qra_cross
+  input_mode: qra_cross
+  max_answer_length: 512
+  max_context_length: 768
+  max_total_length: 1283       # only used by the concat modes
+  truncation: head_tail        # head | tail | head_tail
+  head_ratio: 0.5
+  chunk: false
+  chunk_size: null
+  chunk_overlap: 32
+  max_chunks: 4
+
+train:
+  epochs: 4
+  batch_size: 16
+  eval_batch_size: 32
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  scheduler: linear
+  grad_accumulation: 1
+  max_grad_norm: 1.0
+  fp16: true
+  early_stopping_patience: 2
+  selection_metric: qwk
+  log_every: 50
+  max_train_steps: null
+  save_total_limit: 2
+  class_weight: none
+  objective: ce                # ce | ce_expected | coral
+  aux_weight: 0.5
+  label_smoothing: 0.0
+  regression: smooth_l1
+  device: auto
+  allow_cpu: false
+  resume_from: null
+
+eval:
+  decode_mode: argmax          # argmax | expected (softmax head only)
+  group_columns:
+    - ell_status
+    - grade_level
+    - gender
+    - race_ethnicity
+    - economically_disadvantaged
+    - student_disability_status

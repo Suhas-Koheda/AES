@@ -1,0 +1,45 @@
+# Tiny end-to-end smoke test on a subset of the real files.
+#
+#   python scripts/run_from_config.py --config configs/smoke.yaml
+#
+# Uses a randomly initialised tiny DeBERTa so it runs in ~1 minute and does not
+# depend on a large pretrained checkpoint. Accuracy is meaningless here; the
+# point is to verify the whole pipeline end to end.
+inherits: _base.yaml
+
+experiment:
+  name: smoke
+  output_dir: results/smoke
+  protocol: official
+  seed: 42
+
+data:
+  input_mode: qra_cross
+  max_answer_length: 128
+  max_context_length: 128
+  max_train_samples: 240
+  max_eval_samples: 80
+  num_workers: 0
+
+model:
+  name: cross_attention
+  pretrained_model: hf-internal-testing/tiny-random-deberta-v2
+  dropout: 0.1
+  pooling: attention
+  head_type: softmax
+  num_attention_heads: 4
+  cross_attention_layers: 1
+  combine: gate
+
+train:
+  epochs: 1
+  batch_size: 8
+  eval_batch_size: 16
+  learning_rate: 1.0e-3
+  max_train_steps: 20
+  warmup_ratio: 0.1
+  fp16: true
+  early_stopping_patience: 0
+  log_every: 5
+  max_grad_norm: 1.0
+  allow_cpu: true

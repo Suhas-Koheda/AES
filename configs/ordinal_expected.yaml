@@ -1,0 +1,17 @@
+# Model D (variant 2): softmax cross-entropy + expected-score regression.
+#
+# L = CE(6 logits, class) + aux_weight * SmoothL1(E[score], human score)
+# where E[score] = sum_k softmax(logits)_k * (k + 1).
+#
+# The regression term is applied to genuine softmax probabilities, so the
+# objective and argmax/expected decoding remain mathematically consistent.
+inherits: cross_attention.yaml
+
+experiment:
+  name: cross_attention_expected
+  output_dir: results/04b_cross_attention_expected
+
+train:
+  objective: ce_expected
+  aux_weight: 0.5
+  regression: smooth_l1

@@ -1,0 +1,26 @@
+# Optional experimental configuration: add the official source passages.
+#
+# IMPORTANT LIMITATION (verified on the released files):
+#   - FL1 (electoral college) and FL2 (car-free cities) PDFs contain a text
+#     layer and extract cleanly with `pdftotext`.
+#   - IN1-IN6 PDFs are image-based; `pdftotext` returns only page headers.
+#     Those passages therefore require OCR before they can be used.
+#   - Source passages are ~3,000+ tokens, so they are truncated here.
+#
+# This configuration is OFF by default and must not be mixed with the main
+# holistic-rubric results without labelling it as an experimental variant.
+inherits: cross_attention.yaml
+
+experiment:
+  name: cross_attention_plus_source
+  output_dir: results/05_cross_attention_plus_source
+
+data:
+  include_source: true
+  source_texts_dir: data/asap2_raw/extracted/source_texts_txt
+  max_context_length: 1024
+  max_answer_length: 512
+
+train:
+  batch_size: 8
+  grad_accumulation: 2

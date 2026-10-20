@@ -1,0 +1,17 @@
+# Model D (variant 1): CORAL ordinal head on the cross-attention encoder.
+#
+# CORAL produces K-1 = 5 ordered logits. The target is the extended binary
+# vector 1[score > k], and the loss is mean BCE over the five cutpoints.
+# Decoding counts positive logits (sigmoid > 0.5); no softmax is applied.
+inherits: cross_attention.yaml
+
+experiment:
+  name: cross_attention_coral
+  output_dir: results/04_cross_attention_coral
+
+model:
+  head_type: coral
+
+train:
+  objective: coral
+  selection_metric: qwk

@@ -1,0 +1,31 @@
+# Model B: pretrained Transformer over a single concatenated sequence
+#   [QUESTION] ... [RUBRIC] ... [ANSWER] ...
+#
+# Budget note: with a 512-token total, the question+rubric context is capped at
+# 192 tokens and the essay at 317 tokens. The rubric is therefore truncated --
+# a genuine limitation of concatenation that the separate-encoder model (Model C)
+# avoids. See `transformer_long.yaml` for a 1024-token variant and
+# `cross_attention_matched.yaml` for a same-budget controlled comparison.
+inherits: _base.yaml
+
+experiment:
+  name: transformer_qra_concat
+  output_dir: results/02_transformer_qra_concat
+  protocol: official
+  seed: 42
+
+data:
+  input_mode: qra_concat
+  max_total_length: 512
+  max_context_length: 192
+  max_answer_length: 317
+  truncation: head_tail
+
+model:
+  name: transformer
+  pretrained_model: microsoft/deberta-v3-small
+  dropout: 0.1
+  pooling: attention
+  head_type: softmax
+  freeze_encoder: false
+  gradient_checkpointing: false

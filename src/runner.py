@@ -1,0 +1,491 @@
+"""Config-driven experiment runner shared by all scripts.
+
+Responsibilities
+----------------
+1. Resolve paths, seed everything, describe the environment.
+2. Load and validate the official data, build the requested split protocol.
+3. Load the official rubric and (optionally) source texts.
+4. Build tokenizer, datasets, collator and dataloaders.
+5. Fit the selected model (TF-IDF or neural) with validation-based selection.
+6. Evaluate the *selected* model on the untouched test split.
+7. Persist configs, split manifests, metrics, predictions and model info.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import math
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader
+
+from .collator import CollatorConfig, EssayCollator
+from .data import (
+    DEMOGRAPHIC_COLUMNS,
+    EssayDataset,
+    load_asap_data,
+    make_heldout_prompt_splits,
+    make_official_splits,
+    save_split_manifest,
+)
+from .evaluate import (
+    evaluate_predictions,
+    predict,
+    save_evaluation,
+    summarise,
+)
+from .fairness import build_fairness_report, save_fairness_report
+from .labels import NUM_CLASSES, decode_logits
+from .losses import LossComputer, compute_class_weights
+from .metrics import compute_metrics, to_plain_floats
+from .models import TfidfEssayScorer, build_model, describe_model
+from .rubric_loader import load_rubric
+from .train import Trainer
+from .utils import (
+    PROJECT_ROOT,
+    deep_get,
+    describe_environment,
+    ensure_dir,
+    get_device,
+    get_logger,
+    resolve_path,
+    save_json,
+    set_seed,
+)
+
+logger = get_logger()
+
+
+# --------------------------------------------------------------------------- #
+# Paths & small helpers
+# --------------------------------------------------------------------------- #
+def _resolve(path: Optional[str], root: Path) -> Optional[Path]:
+    if path is None:
+        return None
+    return resolve_path(path, base=root)
+
+
+def _experiment_dir(cfg: dict, root: Path) -> Path:
+    out = deep_get(cfg, "experiment.output_dir", "results/run")
+    return ensure_dir(_resolve(out, root))
+
+
+def class_counts(df: pd.DataFrame) -> list[int]:
+    counts = df["score"].astype(int).value_counts().sort_index()
+    return [int(counts.get(score, 0)) for score in range(1, NUM_CLASSES + 1)]
+
+
+# --------------------------------------------------------------------------- #
+# Data
+# --------------------------------------------------------------------------- #
+def load_and_split(cfg: dict, root: Path):
+    data_cfg = cfg.get("data", {})
+    protocol = deep_get(cfg, "experiment.protocol", "official")
+    seed = int(deep_get(cfg, "experiment.seed", 42))
+    val_fraction = float(data_cfg.get("val_fraction", 0.15))
+
+    train_csv = _resolve(data_cfg.get("train_csv"), root)
+    test_csv = _resolve(data_cfg.get("test_csv"), root)
+    train_df, test_df = load_asap_data(train_csv, test_csv)
+
+    if protocol == "official":
+        if test_df is None:
+            raise ValueError("official protocol requires data.test_csv")
+        train_split, val_split, test_split, manifest = make_official_splits(
+            train_df, test_df, val_fraction=val_fraction, seed=seed
+        )
+    elif protocol == "heldout_prompt":
+        heldout = deep_get(cfg, "experiment.heldout_prompt")
+        if not heldout:
+            raise ValueError("heldout_prompt protocol requires experiment.heldout_prompt")
+        # Use the official training partition as the pool so the official test
+        # labels never influence the held-out-prompt experiment.
+        train_split, val_split, test_split, manifest = make_heldout_prompt_splits(
+            train_df, heldout, val_fraction=val_fraction, seed=seed
+        )
+    else:
+        raise ValueError(f"unknown protocol: {protocol!r}")
+
+    logger.info(
+        "Split [%s] train=%d val=%d test=%d | prompts train=%s test=%s",
+        protocol,
+        len(train_split),
+        len(val_split),
+        len(test_split),
+        sorted(train_split["prompt_name"].unique()),
+        sorted(test_split["prompt_name"].unique()),
+    )
+
+    # Optional subsampling for smoke tests / debugging (never used for reported
+    # experiments unless explicitly set in the config).
+    max_train = data_cfg.get("max_train_samples")
+    max_val = data_cfg.get("max_eval_samples")
+    max_test = data_cfg.get("max_eval_samples")
+    if max_train:
+        train_split = train_split.sample(
+            n=min(int(max_train), len(train_split)), random_state=seed
+        ).reset_index(drop=True)
+    if max_val:
+        val_split = val_split.sample(
+            n=min(int(max_val), len(val_split)), random_state=seed
+        ).reset_index(drop=True)
+    if max_test:
+        test_split = test_split.sample(
+            n=min(int(max_test), len(test_split)), random_state=seed
+        ).reset_index(drop=True)
+
+    return train_split, val_split, test_split, manifest, test_df
+
+
+def load_source_texts(source_texts_dir: Optional[str], root: Path) -> Dict[str, str]:
+    """Map prompt names to extracted source text (optional experimental input)."""
+    from .data import PROMPT_TO_SOURCE
+
+    if not source_texts_dir:
+        return {}
+    directory = _resolve(source_texts_dir, root)
+    if not directory or not directory.exists():
+        logger.warning("source_texts_dir does not exist: %s", directory)
+        return {}
+    texts: Dict[str, str] = {}
+    for prompt, stem in PROMPT_TO_SOURCE.items():
+        path = directory / f"{stem}.txt"
+        if path.exists():
+            texts[prompt] = path.read_text(encoding="utf-8").strip()
+        else:
+            logger.warning("missing source text for %r: %s", prompt, path)
+    return texts
+
+
+def build_tokenizer(cfg: dict):
+    from transformers import AutoTokenizer
+
+    model_name = deep_get(cfg, "model.pretrained_model", "microsoft/deberta-v3-small")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name, cache_dir=deep_get(cfg, "model.cache_dir")
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token or tokenizer.sep_token
+    return tokenizer
+
+
+def build_collator(cfg: dict, tokenizer) -> EssayCollator:
+    data_cfg = cfg.get("data", {})
+    max_answer = int(data_cfg.get("max_answer_length", 512))
+    max_context = int(data_cfg.get("max_context_length", 512))
+    max_total = data_cfg.get("max_total_length")
+    if max_total is None:
+        max_total = max_answer + max_context + 3
+    collator_cfg = CollatorConfig(
+        input_mode=data_cfg.get("input_mode", "qra_cross"),
+        max_answer_length=max_answer,
+        max_context_length=max_context,
+        max_total_length=int(max_total),
+        truncation=data_cfg.get("truncation", "head_tail"),
+        head_ratio=float(data_cfg.get("head_ratio", 0.5)),
+        chunk=bool(data_cfg.get("chunk", False)),
+        chunk_size=data_cfg.get("chunk_size"),
+        chunk_overlap=int(data_cfg.get("chunk_overlap", 32)),
+        max_chunks=int(data_cfg.get("max_chunks", 4)),
+        include_source=bool(data_cfg.get("include_source", False)),
+    )
+    return EssayCollator(tokenizer, collator_cfg)
+
+
+def make_loader(
+    dataset: EssayDataset,
+    collator: EssayCollator,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int = 0,
+    seed: int = 42,
+) -> DataLoader:
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    def _init_worker(worker_id: int):
+        np.random.seed(seed + worker_id)
+
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        collate_fn=collator,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+        drop_last=False,
+        generator=generator,
+        worker_init_fn=_init_worker if num_workers > 0 else None,
+        persistent_workers=num_workers > 0,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# TF-IDF path
+# --------------------------------------------------------------------------- #
+def run_tfidf(cfg: dict, root: Path, out_dir: Path) -> dict:
+    model_cfg = cfg.get("model", {})
+    train_df, val_df, test_df, manifest, _ = load_and_split(cfg, root)
+    save_split_manifest(train_df, val_df, test_df, manifest, out_dir)
+
+    C_grid = model_cfg.get("C_grid", [1.0])
+    text_col = model_cfg.get("text_column", "full_text")
+    texts = {name: df[text_col].astype(str).tolist() for name, df in (
+        ("train", train_df), ("val", val_df), ("test", test_df)
+    )}
+
+    best = None
+    trials = []
+    for C in C_grid:
+        scorer = TfidfEssayScorer(
+            analyzer=model_cfg.get("analyzer", "word"),
+            ngram_range=tuple(model_cfg.get("ngram_range", (1, 2))),
+            max_features=int(model_cfg.get("max_features", 100_000)),
+            min_df=int(model_cfg.get("min_df", 2)),
+            sublinear_tf=bool(model_cfg.get("sublinear_tf", True)),
+            classifier=model_cfg.get("classifier", "logreg"),
+            C=float(C),
+            class_weight=model_cfg.get("class_weight", "balanced"),
+            max_iter=int(model_cfg.get("max_iter", 3000)),
+            seed=int(deep_get(cfg, "experiment.seed", 42)),
+        )
+        scorer.fit(texts["train"], train_df["label"].tolist())
+        val_pred = scorer.predict(texts["val"])
+        val_metrics = compute_metrics(
+            val_df["score"].tolist(), (val_pred + 1).tolist()
+        )
+        trials.append({"C": float(C), **{k: v for k, v in val_metrics.items() if k != "confusion_matrix"}})
+        logger.info("TF-IDF C=%.3f val QWK=%.4f MAE=%.4f", C, val_metrics["qwk"], val_metrics["mae"])
+        if best is None or val_metrics["qwk"] > best[0]:
+            best = (val_metrics["qwk"], scorer, float(C))
+
+    best_qwk, scorer, best_C = best
+    scorer.save(str(out_dir / "tfidf_model.joblib"))
+
+    results = {
+        "experiment": deep_get(cfg, "experiment.name", "tfidf"),
+        "protocol": deep_get(cfg, "experiment.protocol", "official"),
+        "model": {"name": "tfidf", "best_C": best_C, "parameters": scorer.parameter_count()},
+        "validation": {"metric": "qwk", "best": best_qwk, "trials": trials},
+        "environment": describe_environment(),
+    }
+
+    for split_name, df, split_texts in (
+        ("val", val_df, texts["val"]),
+        ("test", test_df, texts["test"]),
+    ):
+        probs = scorer.predict_proba(split_texts)
+        decoded = decode_logits(np.log(probs + 1e-12), head_type="softmax", mode="argmax")
+        preds = {
+            "probabilities": probs,
+            "true_score": df["score"].to_numpy(),
+            "predicted_score": decoded["predicted_score"],
+            "predicted_class": decoded["predicted_class"],
+            "essay_ids": df["essay_id"].tolist(),
+            "prompt_names": df["prompt_name"].tolist(),
+            "inference_seconds": float("nan"),
+            "n_samples": len(df),
+        }
+        evaluation = evaluate_predictions(
+            preds,
+            metadata=df,
+            group_columns=deep_get(cfg, "eval.group_columns", []),
+        )
+        save_evaluation(preds, evaluation, out_dir, split_name, metadata=df)
+        results[split_name] = evaluation
+        logger.info("[%s] %s", split_name, summarise(evaluation))
+
+    save_json(results, out_dir / "results.json")
+    summary = {
+        "experiment": results["experiment"],
+        "protocol": results["protocol"],
+        "seed": int(deep_get(cfg, "experiment.seed", 42)),
+        "model": results["model"],
+        "val_qwk": results["val"]["overall"]["qwk"],
+        "test_qwk": results["test"]["overall"]["qwk"],
+        "test_mae": results["test"]["overall"]["mae"],
+        "test_accuracy": results["test"]["overall"]["accuracy"],
+        "test_spearman": results["test"]["overall"]["spearman"],
+    }
+    save_json(summary, out_dir / "summary.json")
+    return results
+
+
+# --------------------------------------------------------------------------- #
+# Neural path
+# --------------------------------------------------------------------------- #
+def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
+    seed = int(deep_get(cfg, "experiment.seed", 42))
+    set_seed(seed)
+    device = get_device(deep_get(cfg, "train.device", "auto"))
+    logger.info("Device: %s", device)
+
+    if device.type == "cpu" and not deep_get(cfg, "train.allow_cpu", False):
+        logger.warning(
+            "Running neural training on CPU. This is supported but slow; set "
+            "train.allow_cpu=true to silence this warning, or use a GPU runtime."
+        )
+
+    train_df, val_df, test_df, manifest, _ = load_and_split(cfg, root)
+    save_split_manifest(train_df, val_df, test_df, manifest, out_dir)
+
+    rubric = load_rubric(_resolve(deep_get(cfg, "data.rubric_path"), root))
+    save_json(rubric.describe(), out_dir / "rubric.json")
+
+    source_texts = load_source_texts(deep_get(cfg, "data.source_texts_dir"), root)
+    include_source = bool(deep_get(cfg, "data.include_source", False))
+    if include_source and not source_texts:
+        raise ValueError(
+            "include_source=true but no source texts were found; "
+            "set data.source_texts_dir to the extracted ASAP2_source-texts folder"
+        )
+
+    tokenizer = build_tokenizer(cfg)
+    collator = build_collator(cfg, tokenizer)
+
+    train_ds = EssayDataset(train_df, rubric.full_text, source_texts=source_texts, include_source=include_source)
+    val_ds = EssayDataset(val_df, rubric.full_text, source_texts=source_texts, include_source=include_source)
+    test_ds = EssayDataset(test_df, rubric.full_text, source_texts=source_texts, include_source=include_source)
+
+    num_workers = int(deep_get(cfg, "data.num_workers", 2))
+    batch_size = int(deep_get(cfg, "train.batch_size", 16))
+    eval_batch_size = int(deep_get(cfg, "train.eval_batch_size", batch_size * 2))
+    train_loader = make_loader(train_ds, collator, batch_size, True, num_workers, seed)
+    val_loader = make_loader(val_ds, collator, eval_batch_size, False, num_workers, seed)
+    test_loader = make_loader(test_ds, collator, eval_batch_size, False, num_workers, seed)
+
+    model = build_model(cfg.get("model", {}), cache_dir=deep_get(cfg, "model.cache_dir"))
+    model_info = describe_model(model)
+    logger.info("Model: %s", json.dumps(model_info))
+    save_json(model_info, out_dir / "model.json")
+
+    head_type = deep_get(cfg, "model.head_type", "softmax")
+    objective = deep_get(cfg, "train.objective", "ce")
+    if head_type == "coral" and objective != "coral":
+        raise ValueError("coral head requires train.objective='coral'")
+    if objective == "coral" and head_type != "coral":
+        raise ValueError("train.objective='coral' requires model.head_type='coral'")
+
+    class_weight_mode = deep_get(cfg, "train.class_weight", "none")
+    weights = compute_class_weights(
+        class_counts(train_df), NUM_CLASSES, class_weight_mode
+    )
+    if weights is not None:
+        logger.info("Class weights: %s", weights.tolist())
+
+    loss_computer = LossComputer(
+        head_type=head_type,
+        objective=objective,
+        aux_weight=float(deep_get(cfg, "train.aux_weight", 0.5)),
+        class_weights=weights,
+        regression=deep_get(cfg, "train.regression", "smooth_l1"),
+        label_smoothing=float(deep_get(cfg, "train.label_smoothing", 0.0)),
+    )
+
+    trainer = Trainer(
+        model,
+        device=device,
+        loss_computer=loss_computer,
+        head_type=head_type,
+        decode_mode=deep_get(cfg, "eval.decode_mode", "argmax"),
+        out_dir=out_dir,
+        learning_rate=float(deep_get(cfg, "train.learning_rate", 2e-5)),
+        weight_decay=float(deep_get(cfg, "train.weight_decay", 0.01)),
+        warmup_ratio=float(deep_get(cfg, "train.warmup_ratio", 0.1)),
+        epochs=int(deep_get(cfg, "train.epochs", 3)),
+        grad_accumulation=int(deep_get(cfg, "train.grad_accumulation", 1)),
+        max_grad_norm=float(deep_get(cfg, "train.max_grad_norm", 1.0)),
+        fp16=bool(deep_get(cfg, "train.fp16", True)),
+        selection_metric=deep_get(cfg, "train.selection_metric", "qwk"),
+        early_stopping_patience=int(deep_get(cfg, "train.early_stopping_patience", 2)),
+        scheduler=deep_get(cfg, "train.scheduler", "linear"),
+        log_every=int(deep_get(cfg, "train.log_every", 50)),
+        max_train_steps=deep_get(cfg, "train.max_train_steps"),
+        save_total_limit=int(deep_get(cfg, "train.save_total_limit", 2)),
+    )
+
+    resume_from = deep_get(cfg, "train.resume_from")
+    train_summary = trainer.fit(train_loader, val_loader, resume_from=resume_from)
+
+    # ---- Final evaluation with the best checkpoint (selected on val QWK) ----
+    best_path = out_dir / "checkpoint_best.pt"
+    if best_path.exists():
+        state = torch.load(best_path, map_location="cpu", weights_only=False)
+        model.load_state_dict(state["model_state_dict"])
+        logger.info("Loaded best checkpoint from epoch %s", state.get("epoch"))
+    model.to(device)
+
+    results = {
+        "experiment": deep_get(cfg, "experiment.name", "neural"),
+        "protocol": deep_get(cfg, "experiment.protocol", "official"),
+        "heldout_prompt": deep_get(cfg, "experiment.heldout_prompt"),
+        "model": model_info,
+        "training": train_summary,
+        "environment": describe_environment(),
+        "config": cfg,
+    }
+
+    group_columns = deep_get(cfg, "eval.group_columns", [])
+    for split_name, loader, df in (
+        ("val", val_loader, val_df),
+        ("test", test_loader, test_df),
+    ):
+        preds = predict(
+            model,
+            loader,
+            device,
+            head_type=head_type,
+            decode_mode=deep_get(cfg, "eval.decode_mode", "argmax"),
+            use_amp=bool(deep_get(cfg, "train.fp16", True)),
+        )
+        metadata = df[[c for c in ["essay_id", "pubpriv"] + group_columns if c in df.columns]].copy()
+        evaluation = evaluate_predictions(preds, metadata=metadata, group_columns=group_columns)
+        save_evaluation(preds, evaluation, out_dir, split_name, metadata=metadata)
+        results[split_name] = evaluation
+        logger.info("[%s] %s", split_name, summarise(evaluation))
+
+        if split_name == "test":
+            fairness = build_fairness_report(preds, df, group_columns)
+            save_fairness_report(fairness, out_dir / "fairness")
+
+    save_json(results, out_dir / "results.json")
+
+    summary = {
+        "experiment": results["experiment"],
+        "protocol": results["protocol"],
+        "heldout_prompt": results["heldout_prompt"],
+        "seed": seed,
+        "model": model_info,
+        "best_epoch": train_summary.get("best_epoch"),
+        "best_val_qwk": train_summary.get("best_metric"),
+        "val_qwk": results["val"]["overall"]["qwk"],
+        "test_qwk": results["test"]["overall"]["qwk"],
+        "test_mae": results["test"]["overall"]["mae"],
+        "test_rmse": results["test"]["overall"]["rmse"],
+        "test_accuracy": results["test"]["overall"]["accuracy"],
+        "test_spearman": results["test"]["overall"]["spearman"],
+        "test_n": results["test"]["overall"]["n"],
+    }
+    save_json(summary, out_dir / "summary.json")
+    logger.info("Summary: %s", json.dumps(to_plain_floats(summary)))
+    return results
+
+
+# --------------------------------------------------------------------------- #
+# Entry point
+# --------------------------------------------------------------------------- #
+def run_experiment(cfg: dict, root: Optional[Path] = None) -> dict:
+    root = Path(root) if root else PROJECT_ROOT
+    out_dir = _experiment_dir(cfg, root)
+    save_json(cfg, out_dir / "config.json")
+    save_json(describe_environment(), out_dir / "environment.json")
+
+    model_name = deep_get(cfg, "model.name", "cross_attention")
+    if model_name == "tfidf":
+        return run_tfidf(cfg, root, out_dir)
+    return run_neural(cfg, root, out_dir)

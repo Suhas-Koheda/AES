@@ -1,0 +1,14 @@
+# Controlled Fusion ablation: same token budgets as `transformer.yaml`
+# (192 context + 317 answer) but with cross-attention instead of concatenation.
+#
+# Comparing this row to `transformer.yaml` isolates the fusion mechanism from
+# the amount of rubric/essay text the model can see.
+inherits: cross_attention.yaml
+
+experiment:
+  name: cross_attention_matched
+  output_dir: results/03b_cross_attention_matched
+
+data:
+  max_answer_length: 317
+  max_context_length: 192

@@ -1,0 +1,22 @@
+# Core
+torch>=2.1
+transformers>=4.45
+accelerate>=0.34
+tokenizers>=0.20
+sentencepiece>=0.1.99
+
+# Data / metrics
+numpy>=1.26
+pandas>=2.0
+scikit-learn>=1.4
+scipy>=1.11
+
+# Config / logging
+PyYAML>=6.0
+tqdm>=4.66
+
+# Optional: report figures
+matplotlib>=3.8
+
+# Testing
+pytest>=8.0

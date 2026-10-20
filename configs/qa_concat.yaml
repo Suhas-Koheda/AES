@@ -1,0 +1,12 @@
+# Question + answer (ablation 2), no rubric.
+inherits: transformer.yaml
+
+experiment:
+  name: qa_concat
+  output_dir: results/abl_02_qa_concat
+
+data:
+  input_mode: qa_concat
+  max_total_length: 512
+  max_context_length: 160
+  max_answer_length: 349
