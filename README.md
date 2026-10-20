@@ -99,6 +99,13 @@ that appending padded tokens leaves the logits unchanged.
 (default) or separate (`share_encoder: false`), documenting the
 compute/parameter trade-off.
 
+The context is constant for every essay of a prompt, so cross-attention runs
+use a prompt-grouped batch sampler and encode each unique prompt context once
+per batch, broadcasting its hidden states to the essays in that batch. This is
+equivalent to encoding it per essay (unit-tested) but avoids roughly 8x
+redundant context compute. Together with gradient checkpointing and batch 8 it
+keeps the full-budget model inside a 16 GB GPU.
+
 ---
 
 ## 4. Evaluation protocols (kept separate, never merged)

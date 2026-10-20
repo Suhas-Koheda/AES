@@ -368,8 +368,30 @@ class RubricCrossAttentionModel(nn.Module):
         ha = self.answer_encoder(flat_ids[valid], flat_mask[valid])  # (Nv, La, H)
         ha_mask = flat_mask[valid]
 
-        # Encode the shared question+rubric context once per essay.
-        hc = self.context_encoder(context_ids, context_mask)  # (B, Lc, H)
+        # Encode the shared question+rubric context. The context is identical
+        # for every essay of a prompt, so encode each unique prompt context
+        # once and broadcast the result across its rows.
+        prompt_names = batch.get("prompt_names")
+        if prompt_names is not None and len(prompt_names) == batch_size:
+            first_row: Dict[str, int] = {}
+            for row, name in enumerate(prompt_names):
+                first_row.setdefault(str(name), row)
+            unique_rows = list(first_row.values())
+            if len(unique_rows) < batch_size:
+                unique_hc = self.context_encoder(
+                    context_ids[unique_rows], context_mask[unique_rows]
+                )
+                positions = {name: pos for pos, name in enumerate(first_row)}
+                remap = torch.tensor(
+                    [positions[str(name)] for name in prompt_names],
+                    dtype=torch.long,
+                    device=answer_ids.device,
+                )
+                hc = unique_hc[remap]
+            else:
+                hc = self.context_encoder(context_ids, context_mask)  # (B, Lc, H)
+        else:
+            hc = self.context_encoder(context_ids, context_mask)  # (B, Lc, H)
         # Expand context to match valid chunk rows.
         batch_index = torch.arange(batch_size, device=answer_ids.device).repeat_interleave(
             num_chunks

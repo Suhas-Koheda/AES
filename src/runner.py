@@ -28,6 +28,7 @@ from .collator import CollatorConfig, EssayCollator
 from .data import (
     DEMOGRAPHIC_COLUMNS,
     EssayDataset,
+    PromptGroupedBatchSampler,
     load_asap_data,
     make_heldout_prompt_splits,
     make_official_splits,
@@ -217,6 +218,7 @@ def make_loader(
     shuffle: bool,
     num_workers: int = 0,
     seed: int = 42,
+    prompt_grouped: bool = False,
 ) -> DataLoader:
     generator = torch.Generator()
     generator.manual_seed(seed)
@@ -224,17 +226,29 @@ def make_loader(
     def _init_worker(worker_id: int):
         np.random.seed(seed + worker_id)
 
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
+    common = dict(
+        dataset=dataset,
         collate_fn=collator,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
-        drop_last=False,
         generator=generator,
         worker_init_fn=_init_worker if num_workers > 0 else None,
         persistent_workers=num_workers > 0,
+    )
+    if prompt_grouped:
+        batch_sampler = PromptGroupedBatchSampler(
+            dataset.df["prompt_name"].astype(str).tolist(),
+            batch_size,
+            shuffle=shuffle,
+            seed=seed,
+        )
+        return DataLoader(batch_sampler=batch_sampler, **common)
+
+    return DataLoader(
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=False,
+        **common,
     )
 
 
@@ -382,9 +396,21 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     num_workers = int(deep_get(cfg, "data.num_workers", 2))
     batch_size = int(deep_get(cfg, "train.batch_size", 16))
     eval_batch_size = int(deep_get(cfg, "train.eval_batch_size", batch_size * 2))
-    train_loader = make_loader(train_ds, collator, batch_size, True, num_workers, seed)
-    val_loader = make_loader(val_ds, collator, eval_batch_size, False, num_workers, seed)
-    test_loader = make_loader(test_ds, collator, eval_batch_size, False, num_workers, seed)
+    # For cross-attention the context is constant per prompt, so grouping
+    # batches by prompt lets the model encode it once per batch.
+    prompt_grouped = deep_get(cfg, "data.input_mode", "") == "qra_cross"
+    train_loader = make_loader(
+        train_ds, collator, batch_size, True, num_workers, seed,
+        prompt_grouped=prompt_grouped,
+    )
+    val_loader = make_loader(
+        val_ds, collator, eval_batch_size, False, num_workers, seed,
+        prompt_grouped=prompt_grouped,
+    )
+    test_loader = make_loader(
+        test_ds, collator, eval_batch_size, False, num_workers, seed,
+        prompt_grouped=prompt_grouped,
+    )
 
     model = build_model(cfg.get("model", {}), cache_dir=deep_get(cfg, "model.cache_dir"))
     model_info = describe_model(model)

@@ -13,6 +13,7 @@ as its pool.  The official test labels are never touched by this protocol.
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -51,8 +52,29 @@ def run_heldout_prompt_sweep(
         run_cfg["experiment"]["name"] = f"{cfg['experiment'].get('name', 'run')}__heldout_{safe_name}"
         run_cfg["experiment"]["output_dir"] = str(Path(output_root) / safe_name)
 
-        results = runner(run_cfg)
-        test = results["test"]["overall"]
+        summary_path = Path(run_cfg["experiment"]["output_dir"]) / "summary.json"
+        if summary_path.exists():
+            # A completed prompt survives session restarts; the sweep is
+            # expensive (one full training run per prompt).
+            logger.info("Reusing completed held-out run: %s", summary_path)
+            with open(summary_path, encoding="utf-8") as fh:
+                summary = json.load(fh)
+            test = {
+                "n": summary.get("test_n"),
+                "qwk": summary.get("test_qwk"),
+                "mae": summary.get("test_mae"),
+                "rmse": summary.get("test_rmse"),
+                "accuracy": summary.get("test_accuracy"),
+                "spearman": summary.get("test_spearman"),
+            }
+            best_epoch = summary.get("best_epoch")
+            best_val_qwk = summary.get("best_val_qwk")
+        else:
+            results = runner(run_cfg)
+            test = results["test"]["overall"]
+            best_epoch = results["training"].get("best_epoch")
+            best_val_qwk = results["training"].get("best_metric")
+
         per_prompt[prompt] = {
             "n": test["n"],
             "qwk": test["qwk"],
@@ -60,8 +82,8 @@ def run_heldout_prompt_sweep(
             "rmse": test["rmse"],
             "accuracy": test["accuracy"],
             "spearman": test["spearman"],
-            "best_epoch": results["training"].get("best_epoch"),
-            "best_val_qwk": results["training"].get("best_metric"),
+            "best_epoch": best_epoch,
+            "best_val_qwk": best_val_qwk,
             "output_dir": str(run_cfg["experiment"]["output_dir"]),
         }
         summaries.append(per_prompt[prompt])

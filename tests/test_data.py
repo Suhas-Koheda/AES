@@ -8,6 +8,7 @@ import pytest
 
 from src.data import (
     EssayDataset,
+    PromptGroupedBatchSampler,
     assert_no_leakage,
     check_prompt_disjointness,
     fill_missing_assignments,
@@ -127,3 +128,25 @@ def test_check_prompt_disjointness(synthetic_train_df):
     prompt = synthetic_train_df["prompt_name"].iloc[0]
     with pytest.raises(AssertionError):
         check_prompt_disjointness(synthetic_train_df, synthetic_train_df, prompt)
+
+
+def test_prompt_grouped_batch_sampler_covers_every_row_once(synthetic_train_df):
+    prompts = synthetic_train_df["prompt_name"].tolist()
+    sampler = PromptGroupedBatchSampler(prompts, batch_size=8, shuffle=True, seed=7)
+    batches = list(sampler)
+    assert len(batches) == len(sampler)
+    flat = [index for batch in batches for index in batch]
+    assert sorted(flat) == list(range(len(prompts)))
+    assert max(len(batch) for batch in batches) <= 8
+
+
+def test_prompt_grouped_batch_sampler_is_mostly_single_prompt(synthetic_train_df):
+    prompts = np.asarray(synthetic_train_df["prompt_name"].tolist())
+    sampler = PromptGroupedBatchSampler(prompts.tolist(), batch_size=8, shuffle=True, seed=3)
+    mixed = 0
+    for batch in sampler:
+        if len(set(prompts[batch].tolist())) > 1:
+            mixed += 1
+    # Only the batches straddling a prompt boundary can mix prompts.
+    assert mixed <= len(sampler) // 2
+

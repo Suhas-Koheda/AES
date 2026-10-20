@@ -192,3 +192,19 @@ def test_build_model_rejects_unknown(patch_tiny_encoder):
 def test_shared_encoder_is_actually_shared(patch_tiny_encoder):
     model = _cross(patch_tiny_encoder)
     assert model.context_encoder is model.answer_encoder
+
+
+def test_context_dedup_matches_per_essay_encoding(dummy_tokenizer, sample_records, patch_tiny_encoder):
+    """Encoding one context per prompt must equal encoding it per essay."""
+    collator = _collator(dummy_tokenizer, "qra_cross")
+    batch = collator(sample_records[:6])  # prompts A/B/C/A/B/C
+    model = _cross(patch_tiny_encoder).eval()
+
+    with torch.no_grad():
+        deduped = model(batch)["logits"]
+        without_prompts = dict(batch)
+        without_prompts.pop("prompt_names")
+        per_essay = model(without_prompts)["logits"]
+
+    assert torch.allclose(deduped, per_essay, atol=1e-5), (deduped - per_essay).abs().max()
+

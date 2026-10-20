@@ -22,7 +22,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 from .preprocessing import clean_text, word_count
 from .utils import get_logger
@@ -468,3 +468,67 @@ class EssayDataset(Dataset):
     def metadata_frame(self) -> pd.DataFrame:
         cols = [c for c in ["essay_id", "prompt_name", "score"] + DEMOGRAPHIC_COLUMNS if c in self.df.columns]
         return self.df[cols].copy()
+
+
+class PromptGroupedBatchSampler(Sampler[list[int]]):
+    """Batch indices so that most batches contain a single prompt.
+
+    The question+rubric context is identical for every essay of a prompt.
+    Contiguous per-prompt batches let :class:`RubricCrossAttentionModel`
+    encode that context once per batch instead of once per essay, which is the
+    main memory/compute cost of the two-pass design.  Indices are shuffled
+    within prompts and the resulting batches are shuffled each epoch, so
+    nothing about the data order is fixed.
+    """
+
+    def __init__(
+        self,
+        prompt_names: Sequence[str],
+        batch_size: int,
+        *,
+        shuffle: bool = True,
+        seed: int = 42,
+        drop_last: bool = False,
+    ):
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        self.batch_size = int(batch_size)
+        self.shuffle = shuffle
+        self.seed = int(seed)
+        self.drop_last = drop_last
+        self._epoch = 0
+        self.groups: Dict[str, List[int]] = {}
+        for index, prompt in enumerate(prompt_names):
+            self.groups.setdefault(str(prompt), []).append(index)
+        self._prompts = sorted(self.groups)
+
+    def __iter__(self):
+        rng = np.random.default_rng(self.seed + self._epoch)
+        self._epoch += 1
+
+        prompts = list(self._prompts)
+        if self.shuffle:
+            rng.shuffle(prompts)
+
+        order: List[int] = []
+        for prompt in prompts:
+            indices = np.asarray(self.groups[prompt], dtype=np.int64)
+            if self.shuffle:
+                indices = rng.permutation(indices)
+            order.extend(int(i) for i in indices)
+
+        batches = [
+            order[start : start + self.batch_size]
+            for start in range(0, len(order), self.batch_size)
+        ]
+        if self.drop_last and batches and len(batches[-1]) < self.batch_size:
+            batches.pop()
+        if self.shuffle:
+            rng.shuffle(batches)
+        yield from batches
+
+    def __len__(self) -> int:
+        n = sum(len(v) for v in self.groups.values())
+        if self.drop_last:
+            return n // self.batch_size
+        return (n + self.batch_size - 1) // self.batch_size
