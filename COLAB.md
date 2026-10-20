@@ -150,6 +150,7 @@ drive.mount("/content/drive")
 | `ModuleNotFoundError: sentencepiece` | `!pip install sentencepiece` (needed by the DeBERTa-v3 tokenizer) |
 | CUDA out of memory | reduce `train.batch_size`, increase `train.grad_accumulation`, or lower `data.max_context_length` |
 | DataLoader worker errors | set `--override data.num_workers=0` |
+| `pdftotext not found` during setup | expected on Colab; source-text experiments are optional. `!apt-get -qq install -y poppler-utils` if you need them |
 | Test zip will not open | install `unzip`/`7z`; password is `asap2_test` |
 | `torch.cuda.is_available() == False` | switch the Colab runtime to GPU |
 | Figures missing | `!pip install matplotlib` then re-run `scripts/make_report.py` |

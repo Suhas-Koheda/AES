@@ -51,6 +51,9 @@ These were checked directly against the official repository, not assumed:
   contain them.
 * Essay length (train): median 346 words, p75 454, max 8,944.
 * Essay-ID and full-text overlap between train and test: **0**.
+* 18 train rows and 10 test rows have an empty `assignment`. Each prompt has
+  exactly one assignment text, so those cells are back-filled from the prompt
+  before validation (`fill_missing_assignments`); no rows are dropped.
 * The rubric is **one common holistic 1–6 rubric** for all seven prompts.
   There are no per-trait labels and no rubric variation across essays.
 * Source passages: `FL1`/`FL2` PDFs have a text layer; `IN1`–`IN6` are

@@ -65,10 +65,68 @@ PROMPT_TO_SOURCE = {
 # --------------------------------------------------------------------------- #
 # Schema verification
 # --------------------------------------------------------------------------- #
+def fill_missing_assignments(
+    df: pd.DataFrame, name: str = "data"
+) -> tuple[pd.DataFrame, int]:
+    """Fill null ``assignment`` values from the prompt-level assignment text.
+
+    The released ASAP 2.0 files contain a small number of rows (18 train,
+    10 test as of the 2025 release) whose ``assignment`` is empty, even though
+    every prompt has exactly one assignment text elsewhere in the same file.
+    Because ``assignment`` is a *prompt-level* attribute, the correct repair is
+    to copy the prompt's text into those rows. Nothing is dropped and no
+    example-level information is invented.
+
+    Raises if a prompt with missing assignments has no non-null example.
+    """
+    missing = df["assignment"].isna()
+    if not missing.any():
+        return df, 0
+
+    if df.loc[missing, "prompt_name"].isna().any():
+        raise ValueError(
+            f"[{name}] cannot fill missing assignment for rows with null prompt_name"
+        )
+
+    available = df.loc[~missing]
+    mapping = available.groupby("prompt_name")["assignment"].first()
+
+    distinct = available.groupby("prompt_name")["assignment"].nunique()
+    ambiguous = distinct[distinct > 1]
+    if len(ambiguous):
+        logger.warning(
+            "[%s] prompts with more than one distinct assignment text: %s; "
+            "using the first for back-filling",
+            name,
+            ambiguous.to_dict(),
+        )
+
+    unresolved = sorted(set(df.loc[missing, "prompt_name"]) - set(mapping.index))
+    if unresolved:
+        raise ValueError(
+            f"[{name}] {int(missing.sum())} rows have a null assignment and "
+            f"prompts {unresolved} have no non-null example to copy from"
+        )
+
+    df = df.copy()
+    df.loc[missing, "assignment"] = df.loc[missing, "prompt_name"].map(mapping)
+    filled = int(missing.sum())
+    logger.warning(
+        "[%s] filled %d null assignment value(s) from the prompt-level text "
+        "(%s)",
+        name,
+        filled,
+        sorted(set(df.loc[missing, "prompt_name"])),
+    )
+    return df, filled
+
+
 def verify_schema(df: pd.DataFrame, name: str, require_score: bool = True) -> dict:
     """Validate the ASAP schema and return a compact summary.
 
-    Raises ``ValueError`` with an actionable message on any violation.
+    ``assignment`` may be null only if :func:`fill_missing_assignments` has not
+    been applied yet; this function reports the count so callers can decide.
+    Raises ``ValueError`` on structural violations.
     """
     missing = [c for c in CORE_COLUMNS if c not in df.columns]
     if missing:
@@ -86,10 +144,16 @@ def verify_schema(df: pd.DataFrame, name: str, require_score: bool = True) -> di
         raise ValueError(f"[{name}] contains {n_dup} duplicated essay_id values")
     if df["full_text"].isna().any():
         raise ValueError(f"[{name}] contains null full_text values")
-    if df["assignment"].isna().any():
-        raise ValueError(f"[{name}] contains null assignment values")
     if df["prompt_name"].isna().any():
         raise ValueError(f"[{name}] contains null prompt_name values")
+    if df["assignment"].isna().any():
+        affected = sorted(df.loc[df["assignment"].isna(), "prompt_name"].unique())
+        raise ValueError(
+            f"[{name}] contains {int(df['assignment'].isna().sum())} null "
+            f"assignment values (prompts: {affected}). Call "
+            "`fill_missing_assignments` first, or use `load_asap_data`, which "
+            "fills them from the prompt-level text."
+        )
 
     if require_score:
         if df["score"].isna().any():
@@ -127,9 +191,11 @@ def load_asap_data(
             "Run `python scripts/prepare_data.py --repo-dir data/asap2_raw` first."
         )
     train_df = pd.read_csv(train_csv)
+    train_df, n_filled_train = fill_missing_assignments(train_df, "train")
     verify_schema(train_df, "train")
 
     test_df = None
+    n_filled_test = 0
     if test_csv is not None:
         test_csv = Path(test_csv)
         if not test_csv.exists():
@@ -138,6 +204,7 @@ def load_asap_data(
                 "The official test archive is password-protected (password: asap2_test)."
             )
         test_df = pd.read_csv(test_csv)
+        test_df, n_filled_test = fill_missing_assignments(test_df, "test")
         verify_schema(test_df, "test")
 
     for df in (train_df, test_df):
@@ -148,6 +215,10 @@ def load_asap_data(
             df["assignment"] = df["assignment"].map(clean_text)
         df["label"] = (df["score"].astype(int) - 1).astype(int)
         df["essay_word_count_recomputed"] = df["full_text"].map(word_count)
+
+    train_df.attrs["n_filled_assignment"] = n_filled_train
+    if test_df is not None:
+        test_df.attrs["n_filled_assignment"] = n_filled_test
 
     return train_df, test_df
 

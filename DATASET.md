@@ -67,6 +67,18 @@ Two prompts are train-only. The official test file is additionally split into
 `public` (2,257) and `private` (5,164) essays; `src/evaluate.py` reports that
 breakdown when `pubpriv` is present.
 
+### Missing `assignment` values
+
+The released files contain a handful of rows with an empty `assignment`:
+**18 in train** (The Face on Mars 5, Exploring Venus 4, Car-free cities 4,
+Facial action coding system 3, Driverless cars 2) and **10 in test**
+(The Face on Mars 5, Facial action coding system 3, Driverless cars 2). Each
+prompt has exactly **one** distinct assignment text elsewhere in the same file,
+so `src/data.py::fill_missing_assignments` copies it into the empty cells
+*before* schema validation. No rows are dropped and no text is invented. The
+number filled is reported by `scripts/inspect_dataset.py` as
+`n_filled_assignment`.
+
 ---
 
 ## 4. Labels

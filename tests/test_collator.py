@@ -123,6 +123,47 @@ def test_invalid_config_rejected():
         raise AssertionError("expected ValueError")
 
 
+class _TokenizerWithoutBuilder:
+    """Mimics ``DebertaV2Tokenizer``, which lacks the special-token builder."""
+
+    def __init__(self, base):
+        self._base = base
+        self.pad_token_id = base.pad_token_id
+        self.cls_token_id = base.cls_token_id
+        self.sep_token_id = base.sep_token_id
+        self.eos_token_id = base.eos_token_id
+        self.model_max_length = base.model_max_length
+
+    def __call__(self, text, add_special_tokens: bool = False, **kwargs):
+        return self._base(text, add_special_tokens=add_special_tokens, **kwargs)
+
+    def __getattr__(self, name):
+        # AttributeError here is what ``getattr(..., default)`` expects.
+        if name == "build_inputs_with_special_tokens":
+            raise AttributeError(name)
+        return getattr(self._base, name)
+
+
+def test_collator_works_without_special_token_builder(dummy_tokenizer, sample_records):
+    tokenizer = _TokenizerWithoutBuilder(dummy_tokenizer)
+    collator = EssayCollator(tokenizer, _cfg(input_mode="qra_cross"))
+    batch = collator(sample_records[:2])
+    # CLS and SEP must still be present for every context row.
+    first_context = batch["context_input_ids"][0][: int(batch["context_attention_mask"][0].sum())]
+    assert first_context[0].item() == dummy_tokenizer.cls_token_id
+    assert first_context[-1].item() == dummy_tokenizer.sep_token_id
+
+
+def test_concat_works_without_special_token_builder(dummy_tokenizer, sample_records):
+    tokenizer = _TokenizerWithoutBuilder(dummy_tokenizer)
+    collator = EssayCollator(
+        tokenizer,
+        _cfg(input_mode="qra_concat", max_context_length=8, max_answer_length=20, max_total_length=40),
+    )
+    batch = collator(sample_records[:2])
+    assert batch["input_ids"].dim() == 3
+
+
 def test_concat_budget_validation():
     try:
         _cfg(input_mode="qra_concat", max_context_length=30, max_answer_length=30, max_total_length=40)

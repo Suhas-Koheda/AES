@@ -135,6 +135,31 @@ class EssayCollator:
                     stacklevel=2,
                 )
 
+    def _add_special_tokens(self, ids: Sequence[int]) -> List[int]:
+        """Build ``[CLS] ids [SEP]`` without relying on a specific tokenizer class.
+
+        Some slow tokenizers (notably ``DebertaV2Tokenizer`` shipped with
+        ``microsoft/deberta-v3-*``) do not implement
+        ``build_inputs_with_special_tokens``. The single-sequence layout is the
+        same for all supported encoders, so falling back to the tokenizer's
+        ``cls_token_id``/``sep_token_id`` is exact, not an approximation.
+        """
+        ids = list(ids)
+        builder = getattr(self.tokenizer, "build_inputs_with_special_tokens", None)
+        if callable(builder):
+            try:
+                return list(builder(ids))
+            except (AttributeError, NotImplementedError):  # pragma: no cover
+                pass
+
+        output: List[int] = []
+        if self.cls_token_id is not None:
+            output.append(self.cls_token_id)
+        output.extend(ids)
+        if self.sep_token_id is not None:
+            output.append(self.sep_token_id)
+        return output
+
     # ------------------------------------------------------------------ #
     # Per-sample helpers
     # ------------------------------------------------------------------ #
@@ -199,7 +224,7 @@ class EssayCollator:
                 sep_token_id=self.sep_token_id if self.cfg.truncation == "head_tail" else None,
             )
         content = context_ids + [self.sep_token_id] + answer_ids if context_ids else answer_ids
-        ids = self.tokenizer.build_inputs_with_special_tokens(content)
+        ids = self._add_special_tokens(content)
         return ids, [1] * len(ids)
 
     # ------------------------------------------------------------------ #
@@ -252,9 +277,7 @@ class EssayCollator:
 
         padded_answers: List[List[List[int]]] = []
         for chunks in answer_chunks:
-            with_specials = [
-                self.tokenizer.build_inputs_with_special_tokens(chunk) for chunk in chunks
-            ]
+            with_specials = [self._add_special_tokens(chunk) for chunk in chunks]
             padded_answers.append(with_specials[:max_chunks])
 
         answer_ids, answer_mask, chunk_mask = self._pad_nested(
@@ -284,11 +307,10 @@ class EssayCollator:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         prepared = []
         for seq in sequences:
-            if add_special_tokens and seq:
-                seq = self.tokenizer.build_inputs_with_special_tokens(seq)
-            elif add_special_tokens and not seq:
-                # Empty context: still needs CLS/SEP so the model has a token.
-                seq = self.tokenizer.build_inputs_with_special_tokens([])
+            if add_special_tokens:
+                # Also handles the empty-context case: CLS/SEP are still added
+                # so every sequence has at least one valid token.
+                seq = self._add_special_tokens(seq)
             prepared.append(seq)
         max_len = max(max(len(s) for s in prepared), 1)
         ids = torch.full((len(prepared), max_len), pad_value, dtype=torch.long)

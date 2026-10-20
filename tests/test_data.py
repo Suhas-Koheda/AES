@@ -10,6 +10,7 @@ from src.data import (
     EssayDataset,
     assert_no_leakage,
     check_prompt_disjointness,
+    fill_missing_assignments,
     load_asap_data,
     make_heldout_prompt_splits,
     make_official_splits,
@@ -48,6 +49,39 @@ def test_verify_schema_duplicate_ids(synthetic_train_df):
     broken.loc[1, "essay_id"] = broken.loc[0, "essay_id"]
     with pytest.raises(ValueError, match="duplicated essay_id"):
         verify_schema(broken, "broken")
+
+
+def test_fill_missing_assignment_from_prompt_level_text(synthetic_train_df):
+    broken = synthetic_train_df.copy()
+    prompt = "Prompt A"
+    expected = broken.loc[broken["prompt_name"] == prompt, "assignment"].iloc[0]
+    broken.loc[broken["prompt_name"] == prompt, "assignment"] = None
+    with pytest.raises(ValueError, match="null assignment"):
+        verify_schema(broken, "broken")
+
+    filled, n_filled = fill_missing_assignments(broken, "broken")
+    assert n_filled == int((broken["prompt_name"] == prompt).sum())
+    assert filled["assignment"].isna().sum() == 0
+    assert (filled.loc[filled["prompt_name"] == prompt, "assignment"] == expected).all()
+    verify_schema(filled, "filled")
+
+
+def test_fill_missing_assignment_no_source_raises():
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "essay_id": ["a", "b"],
+            "score": [1, 2],
+            "full_text": ["x", "y"],
+            "set": ["train", "train"],
+            "pubpriv": [0, 0],
+            "assignment": [None, None],
+            "prompt_name": ["P", "P"],
+        }
+    )
+    with pytest.raises(ValueError, match="no non-null example"):
+        fill_missing_assignments(frame, "broken")
 
 
 def test_load_asap_data(tmp_path, synthetic_train_df, synthetic_test_df):

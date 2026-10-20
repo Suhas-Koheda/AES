@@ -156,7 +156,11 @@ def load_source_texts(source_texts_dir: Optional[str], root: Path) -> Dict[str, 
     for prompt, stem in PROMPT_TO_SOURCE.items():
         path = directory / f"{stem}.txt"
         if path.exists():
-            texts[prompt] = path.read_text(encoding="utf-8").strip()
+            value = path.read_text(encoding="utf-8").strip()
+            texts[prompt] = value
+            # The official CSV stores one prompt name with literal quotes
+            # ("A Cowboy Who Rode the Waves"); register that spelling too.
+            texts[f'"{prompt}"'] = value
         else:
             logger.warning("missing source text for %r: %s", prompt, path)
     return texts
@@ -166,9 +170,17 @@ def build_tokenizer(cfg: dict):
     from transformers import AutoTokenizer
 
     model_name = deep_get(cfg, "model.pretrained_model", "microsoft/deberta-v3-small")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name, cache_dir=deep_get(cfg, "model.cache_dir")
-    )
+    cache_dir = deep_get(cfg, "model.cache_dir")
+    try:
+        # Fast tokenizer is picklable across DataLoader workers and implements
+        # build_inputs_with_special_tokens; prefer it when available.
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name, use_fast=True, cache_dir=cache_dir
+        )
+    except (ValueError, OSError):
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name, use_fast=False, cache_dir=cache_dir
+        )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.sep_token
     return tokenizer
@@ -337,8 +349,12 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     rubric = load_rubric(_resolve(deep_get(cfg, "data.rubric_path"), root))
     save_json(rubric.describe(), out_dir / "rubric.json")
 
-    source_texts = load_source_texts(deep_get(cfg, "data.source_texts_dir"), root)
     include_source = bool(deep_get(cfg, "data.include_source", False))
+    source_texts = (
+        load_source_texts(deep_get(cfg, "data.source_texts_dir"), root)
+        if include_source
+        else {}
+    )
     if include_source and not source_texts:
         raise ValueError(
             "include_source=true but no source texts were found; "

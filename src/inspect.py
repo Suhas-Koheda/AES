@@ -36,6 +36,7 @@ def _describe_split(df: pd.DataFrame, name: str) -> dict:
         "name": name,
         "n_rows": int(len(df)),
         "n_prompts": int(df["prompt_name"].nunique()),
+        "n_filled_assignment": int(df.attrs.get("n_filled_assignment", 0)),
         "set_values": _value_counts(df, "set"),
         "pubpriv_values": _value_counts(df, "pubpriv"),
         "task_values": _value_counts(df, "task"),
@@ -136,6 +137,11 @@ def _print_report(report: dict) -> None:
         logger.info("  scores : %s", block["score_counts"])
         logger.info("  pubpriv: %s", block["pubpriv_values"])
         logger.info("  word count: %s", block["essay_word_count"])
+        if block.get("n_filled_assignment"):
+            logger.info(
+                "  filled %d null assignment value(s) from prompt-level text",
+                block["n_filled_assignment"],
+            )
         for column, counts in block["demographics"].items():
             logger.info("  %s: %s", column, counts)
 

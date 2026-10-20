@@ -75,8 +75,17 @@ def test_compute_metrics_values():
     assert metrics["mae"] == pytest.approx(1 / 6)
     assert metrics["rmse"] == pytest.approx(math.sqrt(1 / 6))
     assert metrics["accuracy"] == pytest.approx(5 / 6)
-    assert metrics["qwk"] == pytest.approx(1.0)
+    # One ordinal-adjacent error does not give perfect QWK; it only reduces it.
+    assert 0.9 < metrics["qwk"] < 1.0
     assert len(metrics["confusion_matrix"]) == 6
+
+
+def test_compute_metrics_perfect_qwk():
+    y = [1, 2, 3, 4, 5, 6, 2, 4]
+    metrics = compute_metrics(y, y)
+    assert metrics["qwk"] == pytest.approx(1.0)
+    assert metrics["mae"] == 0.0
+    assert metrics["accuracy"] == 1.0
 
 
 def test_compute_metrics_empty_raises():
