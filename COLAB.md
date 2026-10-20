@@ -132,10 +132,16 @@ This includes the TF-IDF baseline; you do not need to run it separately.
 |---|---|
 | TF-IDF grid (5 values of C) | 3–6 min (CPU) |
 | Transformer baseline, 4 epochs | 60–90 min |
-| Cross-attention, 4 epochs (shared encoder) | 75–110 min |
+| Cross-attention, 4 epochs (shared encoder) | 60–90 min |
 | CORAL / expected-score variant | same as cross-attention |
-| Ablations (6 runs) | 5–8 h |
-| Held-out-prompt sweep (7 runs) | 7–10 h |
+| Ablations (5 runs) | 4–6 h |
+| Held-out-prompt sweep (7 runs) | 6–9 h |
+
+Cross-attention batches are grouped by prompt and each unique prompt context is
+encoded once per batch, so the two-pass model costs only slightly more than the
+512-token concat baseline. Completed held-out-prompt runs are reused on restart
+(`summary.json` in each prompt directory), so an interrupted sweep resumes where
+it stopped.
 
 Colab sessions are time-limited. Run stages in separate sessions and rely on
 checkpoint resume:
