@@ -49,6 +49,10 @@ def progress(iterable, **kwargs):
 
     Falls back to the plain iterable when tqdm is unavailable or when
     ``TQDM_DISABLE=1`` is set (useful for non-interactive logs).
+
+    ``mininterval`` defaults to 10 s so that notebook-style log capture
+    (Kaggle/Colab cells) does not print one line per batch; on a terminal the
+    bar updates just as often as before, only less frequently.
     """
     disabled = os.environ.get("TQDM_DISABLE", "").lower() in {"1", "true", "yes"}
     if disabled:
@@ -59,6 +63,7 @@ def progress(iterable, **kwargs):
         return iterable
     kwargs.setdefault("dynamic_ncols", True)
     kwargs.setdefault("leave", False)
+    kwargs.setdefault("mininterval", 10.0)
     return tqdm(iterable, **kwargs)
 
 

@@ -62,7 +62,7 @@ def predict(
         all_prompts.extend(batch["prompt_names"])
         if "n_chunks" in batch:
             all_n_chunks.extend(batch["n_chunks"].detach().cpu().tolist())
-        if hasattr(iterator, "set_postfix"):
+        if hasattr(iterator, "set_postfix") and len(all_logits) % 20 == 0:
             iterator.set_postfix(samples=len(all_ids))
     if hasattr(iterator, "close"):
         iterator.close()

@@ -286,13 +286,14 @@ class Trainer:
             running_loss += float(loss.detach()) * len(batch["labels"])
             seen += len(batch["labels"])
 
-            if hasattr(iterator, "set_postfix"):
-                iterator.set_postfix(
-                    loss=f"{running_loss / max(seen, 1):.4f}",
-                    lr=f"{self.optimizer.param_groups[0]['lr']:.1e}",
-                )
-
+            # Refresh the postfix only at report cadence; calling it every
+            # batch forces a tqdm redraw, which floods non-interactive logs.
             if self.log_every and (step + 1) % self.log_every == 0:
+                if hasattr(iterator, "set_postfix"):
+                    iterator.set_postfix(
+                        loss=f"{running_loss / max(seen, 1):.4f}",
+                        lr=f"{self.optimizer.param_groups[0]['lr']:.1e}",
+                    )
                 lr = self.optimizer.param_groups[0]["lr"]
                 logger.info(
                     "epoch %d step %d/%d loss=%.4f lr=%.2e",
