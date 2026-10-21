@@ -527,6 +527,19 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     }
     save_json(summary, out_dir / "summary.json")
     logger.info("Summary: %s", json.dumps(to_plain_floats(summary)))
+
+    if bool(deep_get(cfg, "train.cleanup_checkpoints_after_run", False)):
+        removed = 0
+        for checkpoint in out_dir.glob("checkpoint_*.pt"):
+            checkpoint.unlink(missing_ok=True)
+            removed += 1
+        if removed:
+            logger.info(
+                "Removed %d checkpoint file(s) from %s after successful run",
+                removed,
+                out_dir,
+            )
+
     return results
 
 

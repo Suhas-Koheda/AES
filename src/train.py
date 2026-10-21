@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -105,7 +106,7 @@ class Trainer:
         self.scheduler_kind = scheduler
         self.log_every = log_every
         self.max_train_steps = max_train_steps
-        self.save_total_limit = save_total_limit
+        self.save_total_limit = max(1, int(save_total_limit))
 
         self.optimizer = None
         self.scheduler_obj = None
@@ -141,14 +142,30 @@ class Trainer:
     # ------------------------------------------------------------------ #
     # Checkpointing
     # ------------------------------------------------------------------ #
-    def save_checkpoint(self, path: str | Path, epoch: int) -> None:
+    def save_checkpoint(
+        self,
+        path: str | Path,
+        epoch: int,
+        *,
+        include_optimizer: bool = True,
+    ) -> bool:
+        """Write a checkpoint atomically.
+
+        Returns ``False`` when the filesystem rejects the write (for example
+        when a Colab/Kaggle volume is full) instead of losing the epoch: the
+        training run can still finish and save its predictions/metrics.
+        """
         path = Path(path)
         ensure_dir(path.parent)
         state = {
             "model_state_dict": self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict() if self.optimizer else None,
+            "optimizer_state_dict": (
+                self.optimizer.state_dict() if (self.optimizer and include_optimizer) else None
+            ),
             "scheduler_state_dict": (
-                self.scheduler_obj.state_dict() if self.scheduler_obj else None
+                self.scheduler_obj.state_dict()
+                if (self.scheduler_obj and include_optimizer)
+                else None
             ),
             "epoch": epoch,
             "global_step": self.global_step,
@@ -158,7 +175,21 @@ class Trainer:
             "head_type": self.head_type,
             "selection_metric": self.selection_metric,
         }
-        torch.save(state, path)
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            torch.save(state, tmp)
+            os.replace(tmp, path)
+            return True
+        except (OSError, RuntimeError) as exc:
+            tmp.unlink(missing_ok=True)
+            logger.warning(
+                "Could not save checkpoint %s (%s). Free disk space under %s "
+                "or set train.cleanup_checkpoints_after_run=true; continuing.",
+                path,
+                exc,
+                path.parent,
+            )
+            return False
 
     def load_checkpoint(self, path: str | Path, train_loader: Optional[DataLoader] = None) -> None:
         state = torch.load(path, map_location="cpu", weights_only=False)
@@ -181,12 +212,13 @@ class Trainer:
             self.best_metric,
         )
 
-    def _prune_checkpoints(self) -> None:
+    def _prune_checkpoints(self, keep: int | None = None) -> None:
+        limit = self.save_total_limit if keep is None else keep
         checkpoints = sorted(
             self.out_dir.glob("checkpoint_epoch_*.pt"),
             key=lambda p: p.stat().st_mtime,
         )
-        while len(checkpoints) > self.save_total_limit:
+        while len(checkpoints) > limit:
             old = checkpoints.pop(0)
             if old.name != "checkpoint_best.pt":
                 old.unlink(missing_ok=True)
@@ -353,7 +385,13 @@ class Trainer:
                 self.best_metric = score
                 self.best_epoch = epoch
                 epochs_without_improvement = 0
-                self.save_checkpoint(self.out_dir / "checkpoint_best.pt", epoch)
+                # Best checkpoints are only used for final evaluation, so omit
+                # the optimizer state (saves ~1.2 GB per run).
+                self.save_checkpoint(
+                    self.out_dir / "checkpoint_best.pt",
+                    epoch,
+                    include_optimizer=False,
+                )
                 logger.info("New best %s=%.4f at epoch %d", self.selection_metric, score, epoch)
             else:
                 epochs_without_improvement += 1
@@ -366,6 +404,9 @@ class Trainer:
                     self.early_stopping_patience,
                 )
 
+            # Make room *before* writing the next full checkpoint, otherwise a
+            # full volume fails the save halfway through.
+            self._prune_checkpoints(keep=max(self.save_total_limit - 1, 0))
             self.save_checkpoint(self.out_dir / f"checkpoint_epoch_{epoch}.pt", epoch)
             self._prune_checkpoints()
 

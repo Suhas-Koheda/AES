@@ -22,6 +22,8 @@ Use ``--stages`` to run a subset, ``--seeds`` for multi-seed runs, and
 ``--override key=value`` to change hyperparameters for every training stage.
 Every stage is a separate process, so a failure stops the run with a clear
 stage header; completed stages can be skipped by passing ``--stages`` again.
+Checkpoints are deleted after each successful run to keep Colab/Kaggle volumes
+from filling; pass ``--keep-checkpoints`` to retain them for resume.
 """
 
 from __future__ import annotations
@@ -64,7 +66,12 @@ DEFAULT_ORDER = [
 ]
 
 # Scripts that accept ``--override`` / ``--seeds``.
-TRAINING_SCRIPTS = ("run_from_config.py", "run_baselines.py", "run_ablation.py")
+TRAINING_SCRIPTS = (
+    "run_from_config.py",
+    "run_baselines.py",
+    "run_ablation.py",
+    "run_cross_prompt.py",
+)
 SEED_SCRIPTS = ("run_from_config.py", "run_baselines.py", "run_ablation.py")
 
 
@@ -76,7 +83,17 @@ def main() -> None:
     parser.add_argument("--stages", nargs="+", choices=sorted(STAGES), default=None)
     parser.add_argument("--seeds", type=int, nargs="+", default=None)
     parser.add_argument("--override", nargs="*", default=[])
+    parser.add_argument(
+        "--keep-checkpoints",
+        action="store_true",
+        help="keep model/optimizer checkpoints after each run (uses ~1.7 GB per "
+        "run; by default they are deleted once predictions/metrics are saved)",
+    )
     args = parser.parse_args()
+
+    overrides = list(args.override)
+    if not args.keep_checkpoints:
+        overrides.append("train.cleanup_checkpoints_after_run=true")
 
     stages = args.stages or list(DEFAULT_ORDER)
     if args.prepare and "prepare" not in stages:
@@ -89,8 +106,8 @@ def main() -> None:
 
         if args.seeds and script in SEED_SCRIPTS:
             cmd += ["--seeds", *[str(s) for s in args.seeds]]
-        if args.override and script in TRAINING_SCRIPTS:
-            cmd += ["--override", *args.override]
+        if script in TRAINING_SCRIPTS and overrides:
+            cmd += ["--override", *overrides]
 
         print(
             f"\n{'#' * 70}\n"

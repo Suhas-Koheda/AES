@@ -189,6 +189,7 @@ drive.mount("/content/drive")
 | Symptom | Fix |
 |---|---|
 | `ModuleNotFoundError: sentencepiece` | `!pip install sentencepiece` (needed by the DeBERTa-v3 tokenizer) |
+| `RuntimeError: basic_ios::clear: iostream error` while saving a checkpoint | the Kaggle/Colab volume is full. Delete old checkpoints (`find results -name 'checkpoint_*.pt' -delete`) and rerun; `run_all.py` now removes checkpoints after each successful run by default. Use `--keep-checkpoints` to retain them |
 | CUDA out of memory | defaults already use gradient checkpointing + batch 8 for cross-attention; if it still OOMs, `--override train.batch_size=4 train.grad_accumulation=4 data.max_context_length=512` |
 | DataLoader worker errors | set `--override data.num_workers=0` |
 | `pdftotext not found` during setup | expected on Colab; source-text experiments are optional. `!apt-get -qq install -y poppler-utils` if you need them |

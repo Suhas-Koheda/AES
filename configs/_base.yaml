@@ -46,6 +46,7 @@ train:
   log_every: 50
   max_train_steps: null
   save_total_limit: 2
+  cleanup_checkpoints_after_run: false
   class_weight: none
   objective: ce                # ce | ce_expected | coral
   aux_weight: 0.5
