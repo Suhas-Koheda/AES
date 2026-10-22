@@ -91,6 +91,7 @@ class Trainer:
         log_every: int = 50,
         max_train_steps: Optional[int] = None,
         save_total_limit: int = 2,
+        save_epoch_checkpoints: bool = True,
     ):
         self.model = model
         self.device = device
@@ -110,6 +111,7 @@ class Trainer:
         self.log_every = log_every
         self.max_train_steps = max_train_steps
         self.save_total_limit = max(1, int(save_total_limit))
+        self.save_epoch_checkpoints = bool(save_epoch_checkpoints)
 
         self.optimizer = None
         self.scheduler_obj = None
@@ -119,6 +121,7 @@ class Trainer:
         self.start_epoch = 0
         self.best_metric = -math.inf
         self.best_epoch = -1
+        self.best_model_state_dict = None
 
     # ------------------------------------------------------------------ #
     # Setup
@@ -399,6 +402,12 @@ class Trainer:
             if improved:
                 self.best_metric = score
                 self.best_epoch = epoch
+                # Keep a CPU copy so final evaluation remains faithful even if
+                # the output volume rejects the checkpoint write.
+                self.best_model_state_dict = {
+                    key: value.detach().cpu().clone()
+                    for key, value in self.model.state_dict().items()
+                }
                 epochs_without_improvement = 0
                 # Best checkpoints are only used for final evaluation, so omit
                 # the optimizer state (saves ~1.2 GB per run).
@@ -421,9 +430,10 @@ class Trainer:
 
             # Make room *before* writing the next full checkpoint, otherwise a
             # full volume fails the save halfway through.
-            self._prune_checkpoints(keep=max(self.save_total_limit - 1, 0))
-            self.save_checkpoint(self.out_dir / f"checkpoint_epoch_{epoch}.pt", epoch)
-            self._prune_checkpoints()
+            if self.save_epoch_checkpoints:
+                self._prune_checkpoints(keep=max(self.save_total_limit - 1, 0))
+                self.save_checkpoint(self.out_dir / f"checkpoint_epoch_{epoch}.pt", epoch)
+                self._prune_checkpoints()
 
             if hasattr(epoch_bar, "set_postfix"):
                 epoch_bar.set_postfix(
@@ -449,6 +459,9 @@ class Trainer:
 
         if hasattr(epoch_bar, "close"):
             epoch_bar.close()
+
+        if self.best_model_state_dict is not None:
+            self.model.load_state_dict(self.best_model_state_dict)
 
         summary = {
             "best_metric": self.best_metric,

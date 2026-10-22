@@ -115,11 +115,16 @@ def evaluate_predictions(
     *,
     metadata: Optional[pd.DataFrame] = None,
     group_columns: Optional[list[str]] = None,
+    metric_kwargs: Optional[dict] = None,
 ) -> dict:
     """Compute overall, per-prompt and optional per-group metrics."""
-    metrics = compute_metrics(preds["true_score"], preds["predicted_score"])
+    metric_kwargs = metric_kwargs or {}
+    metrics = compute_metrics(
+        preds["true_score"], preds["predicted_score"], **metric_kwargs
+    )
     per_prompt = group_metrics(
-        preds["true_score"], preds["predicted_score"], preds["prompt_names"]
+        preds["true_score"], preds["predicted_score"], preds["prompt_names"],
+        **metric_kwargs,
     )
 
     out = {
@@ -147,6 +152,7 @@ def evaluate_predictions(
                 merged["true_score"].to_numpy(),
                 merged["predicted_score"].to_numpy(),
                 groups,
+                **metric_kwargs,
             )
             # Attach sample sizes explicitly.
             for label, values in group_results[column].items():

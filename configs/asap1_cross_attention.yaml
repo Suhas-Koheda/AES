@@ -17,3 +17,8 @@ data:
   contexts_path: data/asap1/prompt_contexts.json
   num_workers: 2
   max_context_length: 768
+
+train:
+  # Prompt-specific native score scale is used for QWK after inverse mapping.
+  # Avoid bulky optimizer snapshots on each epoch; retain only best model weights.
+  save_epoch_checkpoints: false

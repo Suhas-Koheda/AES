@@ -1,8 +1,8 @@
 """Evaluation metrics for Automated Essay Scoring.
 
-Primary metric: Quadratic Weighted Kappa (QWK).  Secondary: MAE, RMSE,
-accuracy, Pearson and Spearman correlation. All metrics are computed on the
-original 1..6 score scale; confusion matrices use zero-based class indices.
+Primary metric: Quadratic Weighted Kappa (QWK). Secondary: MAE, RMSE,
+accuracy, Pearson and Spearman correlation. Scores remain on their native
+scale; callers with non-1..6 data provide the native minimum and category count.
 
 The QWK implementation is self-contained (no sklearn dependency at import
 time) and is cross-checked against ``sklearn.metrics.cohen_kappa_score`` in
@@ -150,15 +150,18 @@ def compute_metrics(
     y_true_classes: Optional[Sequence[int]] = None,
     y_pred_classes: Optional[Sequence[int]] = None,
     num_classes: int = NUM_CLASSES,
+    score_min: int = 1,
     include_confusion: bool = True,
 ) -> Dict[str, object]:
-    """Compute the full metric suite on the original 1..6 score scale.
+    """Compute metrics on native scores and ordinal classes.
 
     Parameters
     ----------
-    y_true_scores, y_pred_scores : original ASAP scores (1..6).
+    y_true_scores, y_pred_scores : original benchmark scores.
     y_true_classes, y_pred_classes : optional pre-computed class indices.
-        If omitted they are derived from the scores.
+        If omitted they are derived as ``score - score_min``.
+    num_classes : number of possible ordinal score categories for QWK.
+    score_min : lowest score in the native scale, used to derive class IDs.
 
     Returns a dict with scalar metrics plus (optionally) the confusion matrix.
     Undefined metrics are returned as ``float('nan')`` -- they are never
@@ -172,9 +175,9 @@ def compute_metrics(
         raise ValueError("cannot compute metrics on an empty set")
 
     if y_true_classes is None:
-        y_true_classes = y_true_scores - 1
+        y_true_classes = y_true_scores - score_min
     if y_pred_classes is None:
-        y_pred_classes = y_pred_scores - 1
+        y_pred_classes = y_pred_scores - score_min
     y_true_classes = np.asarray(y_true_classes, dtype=np.int64).ravel()
     y_pred_classes = np.asarray(y_pred_classes, dtype=np.int64).ravel()
 
@@ -203,6 +206,9 @@ def group_metrics(
     y_true_scores: Sequence[int],
     y_pred_scores: Sequence[int],
     groups: Sequence,
+    *,
+    num_classes: int = NUM_CLASSES,
+    score_min: int = 1,
 ) -> Dict[str, Dict[str, object]]:
     """Compute metrics per group (e.g. per prompt, per demographic category)."""
     y_true_scores = np.asarray(y_true_scores, dtype=np.int64).ravel()
@@ -217,7 +223,10 @@ def group_metrics(
         n = int(mask.sum())
         if n == 0:
             continue
-        metrics = compute_metrics(y_true_scores[mask], y_pred_scores[mask])
+        metrics = compute_metrics(
+            y_true_scores[mask], y_pred_scores[mask],
+            num_classes=num_classes, score_min=score_min,
+        )
         metrics.pop("confusion_matrix", None)
         out[str(group)] = metrics
     return out

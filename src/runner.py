@@ -325,6 +325,7 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
         log_every=int(deep_get(cfg, "train.log_every", 50)),
         max_train_steps=deep_get(cfg, "train.max_train_steps"),
         save_total_limit=int(deep_get(cfg, "train.save_total_limit", 2)),
+        save_epoch_checkpoints=bool(deep_get(cfg, "train.save_epoch_checkpoints", True)),
     )
 
     resume_from = deep_get(cfg, "train.resume_from")
@@ -334,8 +335,15 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     best_path = out_dir / "checkpoint_best.pt"
     if best_path.exists():
         state = torch.load(best_path, map_location="cpu", weights_only=False)
-        model.load_state_dict(state["model_state_dict"])
-        logger.info("Loaded best checkpoint from epoch %s", state.get("epoch"))
+        if int(state.get("epoch", -1)) == int(train_summary.get("best_epoch", -2)):
+            model.load_state_dict(state["model_state_dict"])
+            logger.info("Loaded best checkpoint from epoch %s", state.get("epoch"))
+        else:
+            logger.warning(
+                "Best checkpoint epoch %s does not match selected epoch %s; "
+                "using the in-memory best model.",
+                state.get("epoch"), train_summary.get("best_epoch"),
+            )
     model.to(device)
 
     results = {
@@ -375,7 +383,17 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
                 for prompt, cls in zip(preds["prompt_names"], preds["predicted_class"])
             ])
         metadata = df[[c for c in ["essay_id", "pubpriv"] + group_columns if c in df.columns]].copy()
-        evaluation = evaluate_predictions(preds, metadata=metadata, group_columns=group_columns)
+        metric_kwargs = None
+        if deep_get(cfg, "data.dataset") == "asap1":
+            from .asap1 import PROMPT_SCORE_RANGES
+
+            prompt_id = int(deep_get(cfg, "experiment.prompt_id"))
+            low, high = PROMPT_SCORE_RANGES[prompt_id]
+            metric_kwargs = {"num_classes": high - low + 1, "score_min": low}
+        evaluation = evaluate_predictions(
+            preds, metadata=metadata, group_columns=group_columns,
+            metric_kwargs=metric_kwargs,
+        )
         save_evaluation(preds, evaluation, out_dir, split_name, metadata=metadata)
         results[split_name] = evaluation
         logger.info("[%s] %s", split_name, summarise(evaluation))
