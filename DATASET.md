@@ -109,27 +109,7 @@ same text and documents this explicitly.
 
 ---
 
-## 6. Source passages (optional, experimental)
-
-`ASAP2_source-texts/` contains seven PDFs. `pdftotext` produces:
-
-| PDF | Extracted | Usable |
-|---|---|---|
-| FL1_does_the_electoral_college_work | ~14.6k chars | yes |
-| FL2_car-free_cities | ~14.1k chars | yes |
-| IN1_facial_action_coding_system | ~96 chars | **no (image-only)** |
-| IN2_driverless_cars | ~96 chars | **no** |
-| IN3_exploring_venus | ~96 chars | **no** |
-| IN5_a_cowboy_who_rode_the_waves | ~14 chars | **no** |
-| IN6_the_face_on_mars | ~14 chars | **no** |
-
-Source-conditioned training is therefore only possible for two prompts without
-OCR. It is gated behind `data.include_source: true` and
-`configs/cross_attention_source.yaml`, and is not part of the main results.
-
----
-
-## 7. Preprocessing contract
+## 6. Preprocessing contract
 
 1. **Load** both CSVs, validate the schema (required columns, unique non-null
    `essay_id`, non-null text, scores in 1–6).
@@ -156,7 +136,7 @@ OCR. It is gated behind `data.include_source: true` and
 
 ---
 
-## 8. What this dataset cannot support
+## 7. What this dataset cannot support
 
 * **Criterion / trait-level supervision** — only one holistic score exists.
 * **Cross-rubric generalization** — there is one rubric.

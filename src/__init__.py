@@ -3,13 +3,13 @@
 Package layout:
 
 - ``labels``        : ASAP 1-6 <-> internal 0-5 conversion and score decoding.
-- ``metrics``       : QWK, MAE, RMSE, accuracy, Spearman, confusion matrix.
+- ``metrics``       : QWK, Pearson, Spearman, MAE, RMSE, accuracy.
 - ``preprocessing`` : text cleaning, truncation helpers, rubric/question assembly.
 - ``rubric_loader`` : load the official holistic rubric (docx or txt).
 - ``data``          : dataset loading, official/held-out splits, leakage checks.
-- ``collator``      : dynamic padding / chunking / input-format collation.
-- ``models``        : TF-IDF baseline, Transformer baseline, cross-attention model.
-- ``losses``        : CORAL ordinal loss and combined classification+ordinal loss.
+- ``collator``      : dynamic padding and chunking for cross-attention inputs.
+- ``models``        : the question/rubric-conditioned cross-attention model.
+- ``losses``        : six-class holistic cross-entropy.
 - ``train``         : training loop with AMP, early stopping, checkpoint/resume.
 - ``evaluate``      : evaluation, prediction CSVs, metric tables.
 - ``generalization``: held-out-prompt protocol.

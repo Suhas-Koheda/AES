@@ -71,7 +71,6 @@ class Trainer:
         *,
         device,
         loss_computer,
-        head_type: str = "softmax",
         decode_mode: str = "argmax",
         out_dir: str | Path = "results/run",
         learning_rate: float = 2e-5,
@@ -91,7 +90,6 @@ class Trainer:
         self.model = model
         self.device = device
         self.loss_computer = loss_computer
-        self.head_type = head_type
         self.decode_mode = decode_mode
         self.out_dir = ensure_dir(out_dir)
         self.learning_rate = learning_rate
@@ -172,7 +170,6 @@ class Trainer:
             "best_metric": self.best_metric,
             "best_epoch": self.best_epoch,
             "history": self.history,
-            "head_type": self.head_type,
             "selection_metric": self.selection_metric,
         }
         tmp = path.with_name(path.name + ".tmp")
@@ -325,7 +322,6 @@ class Trainer:
             self.model,
             val_loader,
             self.device,
-            head_type=self.head_type,
             decode_mode=self.decode_mode,
             use_amp=self.fp16,
             desc=f"val epoch {epoch + 1}/{self.epochs}",

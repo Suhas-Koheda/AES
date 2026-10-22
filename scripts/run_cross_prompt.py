@@ -12,7 +12,7 @@ reads official test labels.
 Usage
 -----
 python scripts/run_cross_prompt.py --config configs/cross_attention.yaml
-python scripts/run_cross_prompt.py --config configs/transformer.yaml \
+python scripts/run_cross_prompt.py --config configs/cross_attention.yaml \
     --prompts "Driverless cars" "The Face on Mars"
 """
 

@@ -1,4 +1,4 @@
-# Model C: rubric-conditioned cross-attention.
+# Rubric-conditioned cross-attention scoring.
 #
 # Separate encoder passes for the answer and for question+rubric, so the full
 # rubric can be attended to without competing with essay tokens. The answer
@@ -23,15 +23,11 @@ model:
   pretrained_model: microsoft/deberta-v3-small
   dropout: 0.1
   pooling: attention
-  head_type: softmax
-  combine: gate
   num_attention_heads: 8
   cross_attention_layers: 1
-  share_encoder: true
   freeze_encoder: false
-  # Two encoder passes (answer 512 + context 768) need far more activation
-  # memory than the 512-token concat baseline. Checkpointing trades ~30%
-  # compute for roughly 3x lower activation memory, which keeps the model
+  # Two encoder passes (answer 512 + context 768) need substantial activation
+  # memory. Checkpointing trades compute for lower activation memory, which keeps the model
   # inside a 16 GB T4/P100.
   gradient_checkpointing: true
 
@@ -43,4 +39,3 @@ train:
   grad_accumulation: 2
   learning_rate: 2.0e-5
   class_weight: none
-  objective: ce

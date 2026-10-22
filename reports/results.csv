@@ -1,0 +1,6 @@
+dataset_task,evaluation_protocol,our_cross_attention_score,published_paper_score,directly_comparable,citation
+ASAP 2.0 holistic 1-6,"official train/test; validation carved from train",,"No model score in corpus paper",false,"Crossley et al. 2025 https://doi.org/10.1016/j.asw.2025.100954"
+Legacy ASAP+ASAP++ holistic Overall,"leave-one-prompt-out; mean QWK over prompts",,"GAPS 0.670 QWK",false,"Do et al. 2025 https://aclanthology.org/2025.findings-naacl.153/"
+Legacy ASAP+ASAP++ analytic traits,"leave-one-prompt-out; mean QWK",,"GAPS 0.591 mean trait QWK",false,"Do et al. 2025 https://aclanthology.org/2025.findings-naacl.153/"
+Legacy ASAP+ASAP++ analytic traits,"leave-one-prompt-out; mean QWK",,"TRATES Starling 0.595; Llama 0.566; Gemma 0.586",false,"Eltanbouly et al. 2025 https://aclanthology.org/2025.findings-acl.1054/"
+ELLIPSE analytic traits,"11-fold cross-validation; four prompts per test fold",,"TRATES Starling 0.53 mean QWK",false,"Eltanbouly et al. 2025 https://aclanthology.org/2025.findings-acl.1054/"

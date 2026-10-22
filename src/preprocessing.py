@@ -20,7 +20,7 @@ from typing import Iterable, List, Sequence
 
 import numpy as np
 
-from .rubric_loader import FIELD_MARKERS, assemble_model_text
+from .rubric_loader import FIELD_MARKERS
 
 _WHITESPACE_RE = re.compile(r"[ \t]+")
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
@@ -192,25 +192,9 @@ def truncation_report(
 # --------------------------------------------------------------------------- #
 # Input assembly
 # --------------------------------------------------------------------------- #
-QUESTION_PREFIX = FIELD_MARKERS["question"]
-RUBRIC_PREFIX = FIELD_MARKERS["rubric"]
-ANSWER_PREFIX = FIELD_MARKERS["answer"]
-
-
-def build_concatenated_text(
-    question: str, rubric: str, answer: str, include_rubric: bool = True
-) -> str:
-    """Concatenation-baseline input with explicit field markers."""
-    if include_rubric:
-        return assemble_model_text(question, rubric, answer)
-    return f"{QUESTION_PREFIX} {question.strip()} {ANSWER_PREFIX} {answer.strip()}"
-
-
-def build_context_text(question: str, rubric: str, include_rubric: bool = True) -> str:
-    """Question (+ rubric) text used as cross-attention key/value memory."""
-    if include_rubric:
-        return (
-            f"{QUESTION_PREFIX} {question.strip()}\n"
-            f"{RUBRIC_PREFIX} {rubric.strip()}"
-        )
-    return f"{QUESTION_PREFIX} {question.strip()}"
+def build_context_text(question: str, rubric: str) -> str:
+    """Question and rubric text used as cross-attention key/value memory."""
+    return (
+        f"{FIELD_MARKERS['question']} {question.strip()}\n"
+        f"{FIELD_MARKERS['rubric']} {rubric.strip()}"
+    )

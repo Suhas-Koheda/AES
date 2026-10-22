@@ -33,7 +33,6 @@ def predict(
     dataloader,
     device,
     *,
-    head_type: str = "softmax",
     decode_mode: str = "argmax",
     use_amp: bool = False,
     desc: str = "inference",
@@ -71,7 +70,7 @@ def predict(
     logits = np.concatenate(all_logits, axis=0)
     labels = np.concatenate(all_labels, axis=0)
     scores = np.concatenate(all_scores, axis=0)
-    decoded = decode_logits(logits, head_type=head_type, mode=decode_mode)
+    decoded = decode_logits(logits, mode=decode_mode)
 
     return {
         "logits": logits,

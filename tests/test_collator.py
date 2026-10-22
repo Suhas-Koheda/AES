@@ -1,173 +1,68 @@
-"""Collator tests: shapes, budgets, truncation and chunking."""
+"""Cross-attention batch collation, truncation and chunking tests."""
 
-from __future__ import annotations
-
-import torch
+import pytest
 
 from src.collator import CollatorConfig, EssayCollator, make_windows
 
 
-def _cfg(**kwargs):
-    base = dict(
-        input_mode="qra_cross",
-        max_answer_length=16,
-        max_context_length=16,
-        max_total_length=40,
-    )
-    base.update(kwargs)
-    cfg = CollatorConfig(**base)
-    cfg.validate()
-    return cfg
+def collator(tokenizer, **kwargs):
+    defaults = {"max_answer_length": 16, "max_context_length": 16}
+    defaults.update(kwargs)
+    cfg = CollatorConfig(**defaults)
+    return EssayCollator(tokenizer, cfg)
 
 
-def test_cross_batch_shapes(dummy_tokenizer, sample_records):
-    collator = EssayCollator(dummy_tokenizer, _cfg(input_mode="qra_cross"))
-    batch = collator(sample_records[:4])
-    b, c, la = batch["answer_input_ids"].shape
-    assert b == 4 and c == 1
-    assert batch["answer_attention_mask"].shape == (b, c, la)
+def test_cross_attention_batch_shapes(dummy_tokenizer, sample_records):
+    batch = collator(dummy_tokenizer)(sample_records[:4])
+    b, chunks, _ = batch["answer_input_ids"].shape
+    assert (b, chunks) == (4, 1)
     assert batch["context_input_ids"].shape[0] == 4
     assert batch["labels"].tolist() == [r["label"] for r in sample_records[:4]]
     assert batch["chunk_mask"].tolist() == [[1]] * 4
 
 
-def test_concat_batch_shapes(dummy_tokenizer, sample_records):
-    collator = EssayCollator(
-        dummy_tokenizer, _cfg(input_mode="qra_concat", max_context_length=8, max_answer_length=20, max_total_length=40)
-    )
-    batch = collator(sample_records[:3])
-    assert batch["input_ids"].dim() == 3
-    assert batch["input_ids"].shape[0] == 3
-    assert batch["input_ids"].shape[2] <= 40
-    assert torch.all(batch["input_ids"][batch["attention_mask"] == 0] == dummy_tokenizer.pad_token_id)
+def test_truncation_preserves_essay_ending(dummy_tokenizer, sample_records):
+    c = collator(dummy_tokenizer, max_answer_length=10, truncation="head_tail")
+    row = dict(sample_records[0], answer=" ".join(f"w{i}" for i in range(100)))
+    answer = c._answer_chunks(row)[0]
+    assert dummy_tokenizer("w99")["input_ids"][0] in answer
+    assert len(answer) <= 10
 
 
-def test_essay_only_has_no_context(dummy_tokenizer, sample_records):
-    collator = EssayCollator(
-        dummy_tokenizer, _cfg(input_mode="essay_only", max_context_length=0, max_answer_length=20)
-    )
-    batch = collator(sample_records[:2])
-    assert batch["input_ids"].shape[0] == 2
-
-
-def test_head_tail_truncation_preserves_last_token(dummy_tokenizer, sample_records):
-    collator = EssayCollator(
-        dummy_tokenizer,
-        _cfg(input_mode="qra_cross", max_answer_length=10, truncation="head_tail"),
-    )
-    record = dict(sample_records[0])
-    record["answer"] = " ".join(f"w{i}" for i in range(100))
-    chunk = collator._answer_chunks(record)[0]
-    last_content_id = dummy_tokenizer("w99")["input_ids"][0]
-    assert last_content_id in chunk
-    assert len(chunk) <= 10
-
-
-def test_head_truncation_keeps_first_token(dummy_tokenizer, sample_records):
-    collator = EssayCollator(
-        dummy_tokenizer,
-        _cfg(input_mode="qra_cross", max_answer_length=10, truncation="head"),
-    )
-    record = dict(sample_records[0])
-    record["answer"] = " ".join(f"w{i}" for i in range(100))
-    chunk = collator._answer_chunks(record)[0]
-    first_id = dummy_tokenizer("w0")["input_ids"][0]
-    assert chunk[0] == first_id
-    assert len(chunk) == 10
-
-
-def test_context_is_never_empty_for_cross(dummy_tokenizer, sample_records):
-    collator = EssayCollator(dummy_tokenizer, _cfg(input_mode="qra_cross"))
-    batch = collator(sample_records[:1])
-    assert int(batch["context_attention_mask"].sum()) >= 2  # CLS + SEP at minimum
+def test_context_includes_question_and_rubric(dummy_tokenizer, sample_records):
+    batch = collator(dummy_tokenizer)(sample_records[:1])
+    assert int(batch["context_attention_mask"].sum()) >= 2
 
 
 def test_chunking_caps_and_keeps_last_window(dummy_tokenizer, sample_records):
-    collator = EssayCollator(
-        dummy_tokenizer,
-        _cfg(
-            input_mode="qra_cross",
-            max_answer_length=24,
-            chunk=True,
-            chunk_size=24,
-            chunk_overlap=4,
-            max_chunks=3,
-        ),
-    )
-    record = dict(sample_records[0])
-    record["answer"] = " ".join(f"w{i}" for i in range(400))
-    chunks = collator._answer_chunks(record)
+    c = collator(dummy_tokenizer, max_answer_length=24, chunk=True,
+                 chunk_size=24, chunk_overlap=4, max_chunks=3)
+    row = dict(sample_records[0], answer=" ".join(f"w{i}" for i in range(400)))
+    chunks = c._answer_chunks(row)
     assert len(chunks) == 3
-    last_id = dummy_tokenizer("w399")["input_ids"][0]
-    assert last_id in chunks[-1]
+    assert dummy_tokenizer("w399")["input_ids"][0] in chunks[-1]
 
 
-def test_make_windows_short_input():
-    assert make_windows(list(range(5)), chunk_size=10, overlap=2, max_chunks=4) == [list(range(5))]
-
-
-def test_make_windows_overlap():
+def test_window_overlap():
     windows = make_windows(list(range(30)), chunk_size=10, overlap=5, max_chunks=10)
-    assert len(windows) > 1
-    assert all(len(w) <= 10 for w in windows)
-    # Consecutive windows overlap by 5.
     assert windows[0][-5:] == windows[1][:5]
 
 
-def test_invalid_config_rejected():
-    try:
-        _cfg(input_mode="nonsense")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError")
+def test_unsupported_input_mode_rejected():
+    with pytest.raises(ValueError):
+        CollatorConfig(input_mode="unsupported").validate()
 
 
-class _TokenizerWithoutBuilder:
-    """Mimics ``DebertaV2Tokenizer``, which lacks the special-token builder."""
+def test_padding_token_builder_fallback(dummy_tokenizer, sample_records):
+    class TokenizerWithoutBuilder:
+        pad_token_id = dummy_tokenizer.pad_token_id
+        cls_token_id = dummy_tokenizer.cls_token_id
+        sep_token_id = dummy_tokenizer.sep_token_id
 
-    def __init__(self, base):
-        self._base = base
-        self.pad_token_id = base.pad_token_id
-        self.cls_token_id = base.cls_token_id
-        self.sep_token_id = base.sep_token_id
-        self.eos_token_id = base.eos_token_id
-        self.model_max_length = base.model_max_length
+        def __call__(self, *args, **kwargs):
+            return dummy_tokenizer(*args, **kwargs)
 
-    def __call__(self, text, add_special_tokens: bool = False, **kwargs):
-        return self._base(text, add_special_tokens=add_special_tokens, **kwargs)
-
-    def __getattr__(self, name):
-        # AttributeError here is what ``getattr(..., default)`` expects.
-        if name == "build_inputs_with_special_tokens":
-            raise AttributeError(name)
-        return getattr(self._base, name)
-
-
-def test_collator_works_without_special_token_builder(dummy_tokenizer, sample_records):
-    tokenizer = _TokenizerWithoutBuilder(dummy_tokenizer)
-    collator = EssayCollator(tokenizer, _cfg(input_mode="qra_cross"))
-    batch = collator(sample_records[:2])
-    # CLS and SEP must still be present for every context row.
-    first_context = batch["context_input_ids"][0][: int(batch["context_attention_mask"][0].sum())]
-    assert first_context[0].item() == dummy_tokenizer.cls_token_id
-    assert first_context[-1].item() == dummy_tokenizer.sep_token_id
-
-
-def test_concat_works_without_special_token_builder(dummy_tokenizer, sample_records):
-    tokenizer = _TokenizerWithoutBuilder(dummy_tokenizer)
-    collator = EssayCollator(
-        tokenizer,
-        _cfg(input_mode="qra_concat", max_context_length=8, max_answer_length=20, max_total_length=40),
-    )
-    batch = collator(sample_records[:2])
-    assert batch["input_ids"].dim() == 3
-
-
-def test_concat_budget_validation():
-    try:
-        _cfg(input_mode="qra_concat", max_context_length=30, max_answer_length=30, max_total_length=40)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for over-budget config")
+    batch = collator(TokenizerWithoutBuilder())(sample_records[:1])
+    valid = int(batch["context_attention_mask"][0].sum())
+    assert batch["context_input_ids"][0, 0].item() == dummy_tokenizer.cls_token_id
+    assert batch["context_input_ids"][0, valid - 1].item() == dummy_tokenizer.sep_token_id

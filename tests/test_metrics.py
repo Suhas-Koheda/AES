@@ -12,9 +12,15 @@ from src.metrics import (
     compute_metrics,
     confusion_matrix,
     group_metrics,
+    pearson_correlation,
     quadratic_weighted_kappa,
     spearman_rank_correlation,
 )
+
+
+def test_pearson_correlation():
+    assert pearson_correlation([1, 2, 3], [2, 4, 6]) == pytest.approx(1.0)
+    assert math.isnan(pearson_correlation([1, 1], [2, 3]))
 
 
 def test_qwk_perfect_agreement():

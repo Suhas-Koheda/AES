@@ -31,8 +31,5 @@ python scripts/inspect_dataset.py --tokenizer microsoft/deberta-v3-small
 
 echo
 echo "Setup complete. Suggested next steps:"
-echo "  python scripts/run_baselines.py"
 echo "  python scripts/run_from_config.py --config configs/cross_attention.yaml"
-echo "  python scripts/run_ablation.py"
 echo "  python scripts/run_cross_prompt.py --config configs/cross_attention.yaml"
-echo "  python scripts/make_report.py --ablation"

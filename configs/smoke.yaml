@@ -26,10 +26,8 @@ model:
   pretrained_model: hf-internal-testing/tiny-random-deberta-v2
   dropout: 0.1
   pooling: attention
-  head_type: softmax
   num_attention_heads: 4
   cross_attention_layers: 1
-  combine: gate
 
 train:
   epochs: 1

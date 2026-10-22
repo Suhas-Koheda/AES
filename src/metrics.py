@@ -1,7 +1,7 @@
 """Evaluation metrics for Automated Essay Scoring.
 
 Primary metric: Quadratic Weighted Kappa (QWK).  Secondary: MAE, RMSE,
-accuracy, Spearman rank correlation.  All metrics are computed on the
+accuracy, Pearson and Spearman correlation. All metrics are computed on the
 original 1..6 score scale; confusion matrices use zero-based class indices.
 
 The QWK implementation is self-contained (no sklearn dependency at import
@@ -114,6 +114,20 @@ def spearman_rank_correlation(y_true: Sequence[float], y_pred: Sequence[float]) 
     return float((rt * rp).sum() / denom)
 
 
+def pearson_correlation(y_true: Sequence[float], y_pred: Sequence[float]) -> float:
+    """Pearson correlation, returning NaN for fewer than two or constant values."""
+    y_true = np.asarray(y_true, dtype=np.float64).ravel()
+    y_pred = np.asarray(y_pred, dtype=np.float64).ravel()
+    if y_true.size != y_pred.size:
+        raise ValueError("y_true and y_pred must have the same length")
+    if y_true.size < 2:
+        return float("nan")
+    yt = y_true - y_true.mean()
+    yp = y_pred - y_pred.mean()
+    denom = np.sqrt(np.dot(yt, yt) * np.dot(yp, yp))
+    return float(np.dot(yt, yp) / denom) if denom else float("nan")
+
+
 # --------------------------------------------------------------------------- #
 # Aggregate metrics
 # --------------------------------------------------------------------------- #
@@ -170,6 +184,7 @@ def compute_metrics(
         "mae": _safe_mae(y_true_scores, y_pred_scores),
         "rmse": _safe_rmse(y_true_scores, y_pred_scores),
         "accuracy": float(np.mean(y_true_scores == y_pred_scores)),
+        "pearson": pearson_correlation(y_true_scores, y_pred_scores),
         "spearman": spearman_rank_correlation(y_true_scores, y_pred_scores),
         "mean_true_score": float(np.mean(y_true_scores)),
         "mean_pred_score": float(np.mean(y_pred_scores)),

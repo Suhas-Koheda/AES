@@ -50,18 +50,6 @@ DEMOGRAPHIC_COLUMNS = [
 
 EXPECTED_TEST_SIZE = 7421
 
-# Prompt name -> source-text PDF stem shipped in ASAP_2_source_texts.zip.
-PROMPT_TO_SOURCE = {
-    "Facial action coding system": "IN1_facial_action_coding_system",
-    "Driverless cars": "IN2_driverless_cars",
-    "Exploring Venus": "IN3_exploring_venus",
-    "A Cowboy Who Rode the Waves": "IN5_a_cowboy_who_rode_the_waves",
-    "The Face on Mars": "IN6_the_face_on_mars",
-    "Does the electoral college work?": "FL1_does_the_electoral_college_work",
-    "Car-free cities": "FL2_car-free_cities",
-}
-
-
 # --------------------------------------------------------------------------- #
 # Schema verification
 # --------------------------------------------------------------------------- #
@@ -427,9 +415,6 @@ class EssayDataset(Dataset):
         self,
         df: pd.DataFrame,
         rubric_text: str,
-        *,
-        source_texts: Optional[Dict[str, str]] = None,
-        include_source: bool = False,
     ):
         required = {"essay_id", "full_text", "assignment", "prompt_name", "score"}
         missing = required - set(df.columns)
@@ -437,8 +422,6 @@ class EssayDataset(Dataset):
             raise ValueError(f"EssayDataset missing columns: {sorted(missing)}")
         self.df = df.reset_index(drop=True)
         self.rubric_text = rubric_text
-        self.source_texts = source_texts or {}
-        self.include_source = include_source
 
     def __len__(self) -> int:
         return len(self.df)
@@ -446,20 +429,11 @@ class EssayDataset(Dataset):
     def __getitem__(self, index: int) -> dict:
         row = self.df.iloc[index]
         prompt = str(row["prompt_name"])
-        source = None
-        if self.include_source:
-            source = self.source_texts.get(prompt)
-            if source is None:
-                logger.warning(
-                    "No source text for prompt %r; using empty source string", prompt
-                )
-                source = ""
         return {
             "essay_id": str(row["essay_id"]),
             "question": str(row["assignment"]),
             "answer": str(row["full_text"]),
             "rubric": self.rubric_text,
-            "source": source,
             "label": int(row["score"]) - 1,
             "score": int(row["score"]),
             "prompt_name": prompt,

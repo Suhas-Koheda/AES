@@ -1,23 +1,10 @@
-"""Config-driven experiment runner shared by all scripts.
-
-Responsibilities
-----------------
-1. Resolve paths, seed everything, describe the environment.
-2. Load and validate the official data, build the requested split protocol.
-3. Load the official rubric and (optionally) source texts.
-4. Build tokenizer, datasets, collator and dataloaders.
-5. Fit the selected model (TF-IDF or neural) with validation-based selection.
-6. Evaluate the *selected* model on the untouched test split.
-7. Persist configs, split manifests, metrics, predictions and model info.
-"""
+"""Train and evaluate the single question/rubric cross-attention scorer."""
 
 from __future__ import annotations
 
-import copy
 import json
-import math
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -41,10 +28,10 @@ from .evaluate import (
     summarise,
 )
 from .fairness import build_fairness_report, save_fairness_report
-from .labels import NUM_CLASSES, decode_logits
+from .labels import NUM_CLASSES
 from .losses import LossComputer, compute_class_weights
 from .metrics import compute_metrics, to_plain_floats
-from .models import TfidfEssayScorer, build_model, describe_model
+from .models import build_model, describe_model
 from .rubric_loader import load_rubric
 from .train import Trainer
 from .utils import (
@@ -144,30 +131,6 @@ def load_and_split(cfg: dict, root: Path):
     return train_split, val_split, test_split, manifest, test_df
 
 
-def load_source_texts(source_texts_dir: Optional[str], root: Path) -> Dict[str, str]:
-    """Map prompt names to extracted source text (optional experimental input)."""
-    from .data import PROMPT_TO_SOURCE
-
-    if not source_texts_dir:
-        return {}
-    directory = _resolve(source_texts_dir, root)
-    if not directory or not directory.exists():
-        logger.warning("source_texts_dir does not exist: %s", directory)
-        return {}
-    texts: Dict[str, str] = {}
-    for prompt, stem in PROMPT_TO_SOURCE.items():
-        path = directory / f"{stem}.txt"
-        if path.exists():
-            value = path.read_text(encoding="utf-8").strip()
-            texts[prompt] = value
-            # The official CSV stores one prompt name with literal quotes
-            # ("A Cowboy Who Rode the Waves"); register that spelling too.
-            texts[f'"{prompt}"'] = value
-        else:
-            logger.warning("missing source text for %r: %s", prompt, path)
-    return texts
-
-
 def build_tokenizer(cfg: dict):
     from transformers import AutoTokenizer
 
@@ -192,21 +155,16 @@ def build_collator(cfg: dict, tokenizer) -> EssayCollator:
     data_cfg = cfg.get("data", {})
     max_answer = int(data_cfg.get("max_answer_length", 512))
     max_context = int(data_cfg.get("max_context_length", 512))
-    max_total = data_cfg.get("max_total_length")
-    if max_total is None:
-        max_total = max_answer + max_context + 3
     collator_cfg = CollatorConfig(
         input_mode=data_cfg.get("input_mode", "qra_cross"),
         max_answer_length=max_answer,
         max_context_length=max_context,
-        max_total_length=int(max_total),
         truncation=data_cfg.get("truncation", "head_tail"),
         head_ratio=float(data_cfg.get("head_ratio", 0.5)),
         chunk=bool(data_cfg.get("chunk", False)),
         chunk_size=data_cfg.get("chunk_size"),
         chunk_overlap=int(data_cfg.get("chunk_overlap", 32)),
         max_chunks=int(data_cfg.get("max_chunks", 4)),
-        include_source=bool(data_cfg.get("include_source", False)),
     )
     return EssayCollator(tokenizer, collator_cfg)
 
@@ -253,107 +211,6 @@ def make_loader(
 
 
 # --------------------------------------------------------------------------- #
-# TF-IDF path
-# --------------------------------------------------------------------------- #
-def run_tfidf(cfg: dict, root: Path, out_dir: Path) -> dict:
-    model_cfg = cfg.get("model", {})
-    train_df, val_df, test_df, manifest, _ = load_and_split(cfg, root)
-    save_split_manifest(train_df, val_df, test_df, manifest, out_dir)
-
-    C_grid = model_cfg.get("C_grid", [1.0])
-    text_col = model_cfg.get("text_column", "full_text")
-    texts = {name: df[text_col].astype(str).tolist() for name, df in (
-        ("train", train_df), ("val", val_df), ("test", test_df)
-    )}
-
-    best = None
-    trials = []
-    grid = progress(
-        C_grid,
-        desc=f"TF-IDF grid ({len(C_grid)} configs)",
-        unit="config",
-    )
-    for C in grid:
-        scorer = TfidfEssayScorer(
-            analyzer=model_cfg.get("analyzer", "word"),
-            ngram_range=tuple(model_cfg.get("ngram_range", (1, 2))),
-            max_features=int(model_cfg.get("max_features", 100_000)),
-            min_df=int(model_cfg.get("min_df", 2)),
-            sublinear_tf=bool(model_cfg.get("sublinear_tf", True)),
-            classifier=model_cfg.get("classifier", "logreg"),
-            C=float(C),
-            class_weight=model_cfg.get("class_weight", "balanced"),
-            max_iter=int(model_cfg.get("max_iter", 3000)),
-            seed=int(deep_get(cfg, "experiment.seed", 42)),
-        )
-        scorer.fit(texts["train"], train_df["label"].tolist())
-        val_pred = scorer.predict(texts["val"])
-        val_metrics = compute_metrics(
-            val_df["score"].tolist(), (val_pred + 1).tolist()
-        )
-        trials.append({"C": float(C), **{k: v for k, v in val_metrics.items() if k != "confusion_matrix"}})
-        logger.info("TF-IDF C=%.3f val QWK=%.4f MAE=%.4f", C, val_metrics["qwk"], val_metrics["mae"])
-        if best is None or val_metrics["qwk"] > best[0]:
-            best = (val_metrics["qwk"], scorer, float(C))
-        if hasattr(grid, "set_postfix"):
-            grid.set_postfix(best_qwk=f"{best[0]:.4f}", C=f"{float(C):.3f}")
-
-    if hasattr(grid, "close"):
-        grid.close()
-
-    best_qwk, scorer, best_C = best
-    scorer.save(str(out_dir / "tfidf_model.joblib"))
-
-    results = {
-        "experiment": deep_get(cfg, "experiment.name", "tfidf"),
-        "protocol": deep_get(cfg, "experiment.protocol", "official"),
-        "model": {"name": "tfidf", "best_C": best_C, "parameters": scorer.parameter_count()},
-        "validation": {"metric": "qwk", "best": best_qwk, "trials": trials},
-        "environment": describe_environment(),
-    }
-
-    for split_name, df, split_texts in (
-        ("val", val_df, texts["val"]),
-        ("test", test_df, texts["test"]),
-    ):
-        probs = scorer.predict_proba(split_texts)
-        decoded = decode_logits(np.log(probs + 1e-12), head_type="softmax", mode="argmax")
-        preds = {
-            "probabilities": probs,
-            "true_score": df["score"].to_numpy(),
-            "predicted_score": decoded["predicted_score"],
-            "predicted_class": decoded["predicted_class"],
-            "essay_ids": df["essay_id"].tolist(),
-            "prompt_names": df["prompt_name"].tolist(),
-            "inference_seconds": float("nan"),
-            "n_samples": len(df),
-        }
-        evaluation = evaluate_predictions(
-            preds,
-            metadata=df,
-            group_columns=deep_get(cfg, "eval.group_columns", []),
-        )
-        save_evaluation(preds, evaluation, out_dir, split_name, metadata=df)
-        results[split_name] = evaluation
-        logger.info("[%s] %s", split_name, summarise(evaluation))
-
-    save_json(results, out_dir / "results.json")
-    summary = {
-        "experiment": results["experiment"],
-        "protocol": results["protocol"],
-        "seed": int(deep_get(cfg, "experiment.seed", 42)),
-        "model": results["model"],
-        "val_qwk": results["val"]["overall"]["qwk"],
-        "test_qwk": results["test"]["overall"]["qwk"],
-        "test_mae": results["test"]["overall"]["mae"],
-        "test_accuracy": results["test"]["overall"]["accuracy"],
-        "test_spearman": results["test"]["overall"]["spearman"],
-    }
-    save_json(summary, out_dir / "summary.json")
-    return results
-
-
-# --------------------------------------------------------------------------- #
 # Neural path
 # --------------------------------------------------------------------------- #
 def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
@@ -374,24 +231,12 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     rubric = load_rubric(_resolve(deep_get(cfg, "data.rubric_path"), root))
     save_json(rubric.describe(), out_dir / "rubric.json")
 
-    include_source = bool(deep_get(cfg, "data.include_source", False))
-    source_texts = (
-        load_source_texts(deep_get(cfg, "data.source_texts_dir"), root)
-        if include_source
-        else {}
-    )
-    if include_source and not source_texts:
-        raise ValueError(
-            "include_source=true but no source texts were found; "
-            "set data.source_texts_dir to the extracted ASAP2_source-texts folder"
-        )
-
     tokenizer = build_tokenizer(cfg)
     collator = build_collator(cfg, tokenizer)
 
-    train_ds = EssayDataset(train_df, rubric.full_text, source_texts=source_texts, include_source=include_source)
-    val_ds = EssayDataset(val_df, rubric.full_text, source_texts=source_texts, include_source=include_source)
-    test_ds = EssayDataset(test_df, rubric.full_text, source_texts=source_texts, include_source=include_source)
+    train_ds = EssayDataset(train_df, rubric.full_text)
+    val_ds = EssayDataset(val_df, rubric.full_text)
+    test_ds = EssayDataset(test_df, rubric.full_text)
 
     num_workers = int(deep_get(cfg, "data.num_workers", 2))
     batch_size = int(deep_get(cfg, "train.batch_size", 16))
@@ -417,12 +262,6 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     logger.info("Model: %s", json.dumps(model_info))
     save_json(model_info, out_dir / "model.json")
 
-    head_type = deep_get(cfg, "model.head_type", "softmax")
-    objective = deep_get(cfg, "train.objective", "ce")
-    if head_type == "coral" and objective != "coral":
-        raise ValueError("coral head requires train.objective='coral'")
-    if objective == "coral" and head_type != "coral":
-        raise ValueError("train.objective='coral' requires model.head_type='coral'")
 
     class_weight_mode = deep_get(cfg, "train.class_weight", "none")
     weights = compute_class_weights(
@@ -432,11 +271,7 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
         logger.info("Class weights: %s", weights.tolist())
 
     loss_computer = LossComputer(
-        head_type=head_type,
-        objective=objective,
-        aux_weight=float(deep_get(cfg, "train.aux_weight", 0.5)),
         class_weights=weights,
-        regression=deep_get(cfg, "train.regression", "smooth_l1"),
         label_smoothing=float(deep_get(cfg, "train.label_smoothing", 0.0)),
     )
 
@@ -444,7 +279,6 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
         model,
         device=device,
         loss_computer=loss_computer,
-        head_type=head_type,
         decode_mode=deep_get(cfg, "eval.decode_mode", "argmax"),
         out_dir=out_dir,
         learning_rate=float(deep_get(cfg, "train.learning_rate", 2e-5)),
@@ -492,7 +326,6 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
             model,
             loader,
             device,
-            head_type=head_type,
             decode_mode=deep_get(cfg, "eval.decode_mode", "argmax"),
             use_amp=bool(deep_get(cfg, "train.fp16", True)),
             desc=f"eval {split_name}",
@@ -522,6 +355,7 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
         "test_mae": results["test"]["overall"]["mae"],
         "test_rmse": results["test"]["overall"]["rmse"],
         "test_accuracy": results["test"]["overall"]["accuracy"],
+        "test_pearson": results["test"]["overall"]["pearson"],
         "test_spearman": results["test"]["overall"]["spearman"],
         "test_n": results["test"]["overall"]["n"],
     }
@@ -552,7 +386,4 @@ def run_experiment(cfg: dict, root: Optional[Path] = None) -> dict:
     save_json(cfg, out_dir / "config.json")
     save_json(describe_environment(), out_dir / "environment.json")
 
-    model_name = deep_get(cfg, "model.name", "cross_attention")
-    if model_name == "tfidf":
-        return run_tfidf(cfg, root, out_dir)
     return run_neural(cfg, root, out_dir)

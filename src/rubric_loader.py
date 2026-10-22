@@ -186,25 +186,3 @@ def load_rubric(rubric_path: Optional[str | Path] = None) -> RubricLoader:
     # Force parsing so errors surface early with a clear message.
     _ = loader.full_text
     return loader
-
-
-def assemble_model_text(
-    question: str,
-    rubric: str,
-    answer: str,
-    source: Optional[str] = None,
-    include_source: bool = False,
-) -> str:
-    """Build the ``[QUESTION] ... [RUBRIC] ... [ANSWER] ...`` string.
-
-    Only used for the concatenation baseline / inspection.  The cross-attention
-    model receives question+rubric and answer as separate encoder inputs.
-    """
-    parts = [
-        FIELD_MARKERS["question"], question.strip(),
-        FIELD_MARKERS["rubric"], rubric.strip(),
-    ]
-    if include_source and source:
-        parts += [FIELD_MARKERS["source"], source.strip()]
-    parts += [FIELD_MARKERS["answer"], answer.strip()]
-    return " ".join(parts)

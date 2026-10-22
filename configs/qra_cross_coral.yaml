@@ -1,6 +1,0 @@
-# Cross-attention + ordinal objective (ablation 5).
-inherits: ordinal_coral.yaml
-
-experiment:
-  name: qra_cross_coral
-  output_dir: results/abl_05_qra_cross_coral

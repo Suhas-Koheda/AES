@@ -3,9 +3,8 @@
 
 Examples
 --------
-python scripts/run_from_config.py --config configs/baseline.yaml
 python scripts/run_from_config.py --config configs/cross_attention.yaml --seeds 42 43 44
-python scripts/run_from_config.py --config configs/transformer.yaml \
+python scripts/run_from_config.py --config configs/cross_attention.yaml \
     --override train.epochs=2 data.max_train_samples=2000
 """
 
@@ -47,7 +46,7 @@ def aggregate_seeds(seed_dirs: list[Path], out_path: Path) -> dict:
     if not rows:
         return {}
 
-    keys = ["val_qwk", "test_qwk", "test_mae", "test_rmse", "test_accuracy", "test_spearman"]
+    keys = ["val_qwk", "test_qwk", "test_pearson", "test_spearman", "test_mae", "test_rmse", "test_accuracy"]
     aggregate = {"n_seeds": len(rows), "seeds": [r.get("seed") for r in rows], "metrics": {}}
     for key in keys:
         values = np.array([r.get(key, np.nan) for r in rows], dtype=np.float64)

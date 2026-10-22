@@ -1,0 +1,9 @@
+experiment,status,reason
+ASAP2_data_inspection,completed,"Official 17307/7421 CSVs validated; rubric extracted; report saved under ignored results/inspection"
+cross_attention_smoke,completed,"Synthetic tiny-encoder pipeline only; temporary output cleaned; not an AES result"
+unit_tests,completed,"pytest passed using /home/ssp/projects/Python/myenv"
+ASAP2_official,blocked,"No GPU visible; CPU full fine-tuning not feasible in current environment"
+ASAP2_heldout_prompt,not_run,"Requires supported compute"
+GAPS_ASAP_trait,not_run,"Trait adapter not implemented; incompatible labels must not be mapped to holistic scores"
+TRATES_ASAP_trait,not_run,"Trait adapter not implemented; incompatible labels must not be mapped to holistic scores"
+TRATES_ELLIPSE_trait,not_run,"Exact subset/fold adapter not implemented; license CC BY-NC-SA 4.0"

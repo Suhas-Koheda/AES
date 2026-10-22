@@ -1,7 +1,0 @@
-# Question + rubric + answer with cross-attention (ablation 4).
-# Full-budget variant of Model C.
-inherits: cross_attention.yaml
-
-experiment:
-  name: qra_cross
-  output_dir: results/abl_04_qra_cross

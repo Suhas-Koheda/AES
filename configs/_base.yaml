@@ -12,17 +12,13 @@ data:
   train_csv: data/asap2_raw/extracted/train/ASAP_2_Final_github_train.csv
   test_csv: data/asap2_raw/extracted/test/ASAP_2_Final_github_test.csv
   rubric_path: data/asap2_raw/extracted/rubric/asap_scoring_rubric.txt
-  source_texts_dir: data/asap2_raw/extracted/source_texts_txt
   val_fraction: 0.15
   num_workers: 2
-  include_source: false
 
-  # Input construction. `input_mode` is one of:
-  #   essay_only | qa_concat | qra_concat | qra_cross
+  # Essay and context are encoded separately and fused by cross-attention.
   input_mode: qra_cross
   max_answer_length: 512
   max_context_length: 768
-  max_total_length: 1283       # only used by the concat modes
   truncation: head_tail        # head | tail | head_tail
   head_ratio: 0.5
   chunk: false
@@ -48,8 +44,6 @@ train:
   save_total_limit: 2
   cleanup_checkpoints_after_run: false
   class_weight: none
-  objective: ce                # ce | ce_expected | coral
-  aux_weight: 0.5
   label_smoothing: 0.0
   regression: smooth_l1
   device: auto

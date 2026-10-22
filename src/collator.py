@@ -1,28 +1,4 @@
-"""Batch collation: dynamic padding, truncation, chunking, input formats.
-
-Two families of model input are produced:
-
-``concat`` formats (``essay_only``, ``qa_concat``, ``qra_concat``)
-    A single token sequence per (essay chunk)::
-
-        [CLS] [QUESTION] ... [RUBRIC] ... [ANSWER] ... [SEP]
-
-    The question/rubric are tokenised under a separate budget so they are
-    never dropped when the essay is long.  The answer is right-padded within
-    each batch.
-
-``cross`` format (``qra_cross``)
-    The answer is a separate sequence from the question+rubric context, so
-    the encoder can be run on both and cross-attention can use the context
-    as key/value memory.  Both sequences are dynamically padded.
-
-Long essays
------------
-With ``truncation="head_tail"`` (default) the first and last tokens of an
-essay are kept, preserving the introduction *and* the conclusion.  Optional
-chunking (``chunk=True``) encodes several windows and pools them, keeping the
-first and last window so the conclusion survives.
-"""
+"""Dynamic padding and chunking for essay/question/rubric cross-attention."""
 
 from __future__ import annotations
 
@@ -33,9 +9,6 @@ import torch
 
 from .preprocessing import build_context_text, truncate_token_ids
 
-CONCAT_MODES = {"essay_only", "qa_concat", "qra_concat"}
-CROSS_MODES = {"qra_cross"}
-ALL_MODES = CONCAT_MODES | CROSS_MODES
 
 
 @dataclass
@@ -43,34 +16,20 @@ class CollatorConfig:
     input_mode: str = "qra_cross"
     max_answer_length: int = 512
     max_context_length: int = 512
-    max_total_length: int | None = None  # concat modes only
     truncation: str = "head_tail"
     head_ratio: float = 0.5
     chunk: bool = False
     chunk_size: int | None = None
     chunk_overlap: int = 32
     max_chunks: int = 4
-    include_source: bool = False
 
     def validate(self) -> None:
-        if self.input_mode not in ALL_MODES:
-            raise ValueError(
-                f"input_mode must be one of {sorted(ALL_MODES)}, got {self.input_mode!r}"
-            )
+        if self.input_mode != "qra_cross":
+            raise ValueError("only input_mode='qra_cross' is supported")
         if self.max_answer_length <= 0:
             raise ValueError("max_answer_length must be positive")
         if self.max_context_length < 0:
             raise ValueError("max_context_length must be non-negative")
-        if self.input_mode in CONCAT_MODES:
-            if self.max_total_length is None:
-                raise ValueError("max_total_length is required for concat input modes")
-            needed = self.max_context_length + self.max_answer_length + 3
-            if needed > self.max_total_length:
-                raise ValueError(
-                    f"context ({self.max_context_length}) + answer "
-                    f"({self.max_answer_length}) + special tokens exceed "
-                    f"max_total_length ({self.max_total_length}); reduce one of them"
-                )
         if self.chunk:
             if not self.chunk_size or self.chunk_size <= 0:
                 raise ValueError("chunk=True requires a positive chunk_size")
@@ -121,20 +80,6 @@ class EssayCollator:
         if self.cls_token_id is None or self.sep_token_id is None:
             raise ValueError("tokenizer must define cls_token and sep_token")
 
-        model_max = getattr(tokenizer, "model_max_length", None)
-        if self.cfg.input_mode in CONCAT_MODES and model_max and model_max < 1_000_000:
-            if self.cfg.max_total_length and self.cfg.max_total_length > model_max:
-                # DeBERTa/RoBERTa use relative position encodings, so longer
-                # sequences are technically possible; warn rather than fail.
-                import warnings
-
-                warnings.warn(
-                    f"max_total_length ({self.cfg.max_total_length}) exceeds the "
-                    f"tokenizer model_max_length ({model_max}); the encoder may "
-                    "not have been pretrained at this length.",
-                    stacklevel=2,
-                )
-
     def _add_special_tokens(self, ids: Sequence[int]) -> List[int]:
         """Build ``[CLS] ids [SEP]`` without relying on a specific tokenizer class.
 
@@ -164,18 +109,7 @@ class EssayCollator:
     # Per-sample helpers
     # ------------------------------------------------------------------ #
     def _context_ids(self, sample: dict) -> List[int]:
-        mode = self.cfg.input_mode
-        if mode == "essay_only":
-            return []
-        include_rubric = mode in {"qra_concat", "qra_cross"}
-        text = build_context_text(
-            sample["question"], sample["rubric"], include_rubric=include_rubric
-        )
-        if self.cfg.include_source and sample.get("source"):
-            from .rubric_loader import FIELD_MARKERS
-
-            text = f"{text}\n{FIELD_MARKERS['source']} {sample['source'].strip()}"
-
+        text = build_context_text(sample["question"], sample["rubric"])
         ids = self.tokenizer(text, add_special_tokens=False)["input_ids"]
         if len(ids) > self.cfg.max_context_length:
             ids = truncate_token_ids(
@@ -208,25 +142,6 @@ class EssayCollator:
         )
         return [ids]
 
-    def _concat_chunk(self, context_ids: List[int], answer_ids: List[int]) -> tuple[List[int], List[int]]:
-        """Build a full concat sequence, enforcing the total-length budget."""
-        budget = self.cfg.max_total_length - len(context_ids) - 3  # CLS, SEP, SEP
-        if budget < 16:
-            raise ValueError(
-                "context leaves no room for the answer; reduce max_context_length"
-            )
-        if len(answer_ids) > budget:
-            answer_ids = truncate_token_ids(
-                answer_ids,
-                budget,
-                strategy=self.cfg.truncation,
-                head_ratio=self.cfg.head_ratio,
-                sep_token_id=self.sep_token_id if self.cfg.truncation == "head_tail" else None,
-            )
-        content = context_ids + [self.sep_token_id] + answer_ids if context_ids else answer_ids
-        ids = self._add_special_tokens(content)
-        return ids, [1] * len(ids)
-
     # ------------------------------------------------------------------ #
     # Collation
     # ------------------------------------------------------------------ #
@@ -238,33 +153,6 @@ class EssayCollator:
         scores = torch.tensor([int(s["score"]) for s in samples], dtype=torch.long)
         essay_ids = [s["essay_id"] for s in samples]
         prompt_names = [s["prompt_name"] for s in samples]
-
-        if self.cfg.input_mode in CONCAT_MODES:
-            batch_seqs: List[List[List[int]]] = []
-            n_chunks = []
-            for sample in samples:
-                context_ids = self._context_ids(sample)
-                chunks = self._answer_chunks(sample)
-                seqs = []
-                for chunk in chunks:
-                    ids, _ = self._concat_chunk(context_ids, chunk)
-                    seqs.append(ids)
-                n_chunks.append(len(seqs))
-                batch_seqs.append(seqs)
-
-            input_ids, attention_mask, chunk_mask = self._pad_nested(
-                batch_seqs, pad_value=self.pad_token_id
-            )
-            return {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "chunk_mask": chunk_mask,
-                "labels": labels,
-                "scores": scores,
-                "essay_ids": essay_ids,
-                "prompt_names": prompt_names,
-                "n_chunks": torch.tensor(n_chunks, dtype=torch.long),
-            }
 
         # Cross-attention mode: separate answer and context sequences.
         context_ids_batch = [self._context_ids(s) for s in samples]
