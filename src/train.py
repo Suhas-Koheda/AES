@@ -122,6 +122,7 @@ class Trainer:
         self.best_metric = -math.inf
         self.best_epoch = -1
         self.best_model_state_dict = None
+        self.best_checkpoint_epoch = -1
 
     # ------------------------------------------------------------------ #
     # Setup
@@ -411,11 +412,12 @@ class Trainer:
                 epochs_without_improvement = 0
                 # Best checkpoints are only used for final evaluation, so omit
                 # the optimizer state (saves ~1.2 GB per run).
-                self.save_checkpoint(
+                checkpoint_saved = self.save_checkpoint(
                     self.out_dir / "checkpoint_best.pt",
                     epoch,
                     include_optimizer=False,
                 )
+                self.best_checkpoint_epoch = epoch if checkpoint_saved else -1
                 logger.info("New best %s=%.4f at epoch %d", self.selection_metric, score, epoch)
             else:
                 epochs_without_improvement += 1

@@ -335,7 +335,10 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     best_path = out_dir / "checkpoint_best.pt"
     if best_path.exists():
         state = torch.load(best_path, map_location="cpu", weights_only=False)
-        if int(state.get("epoch", -1)) == int(train_summary.get("best_epoch", -2)):
+        if (
+            int(state.get("epoch", -1)) == int(train_summary.get("best_epoch", -2))
+            and int(state.get("epoch", -1)) == int(trainer.best_checkpoint_epoch)
+        ):
             model.load_state_dict(state["model_state_dict"])
             logger.info("Loaded best checkpoint from epoch %s", state.get("epoch"))
         else:
