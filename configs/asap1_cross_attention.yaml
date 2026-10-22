@@ -1,0 +1,19 @@
+# ASAP 1.0 prompt-specific, five-fold 60/20/20 protocol.
+# Run scripts/prepare_asap1.py on the downloaded Kaggle archive first. The
+# source archive and prepared files stay local and ignored by Git.
+inherits: cross_attention.yaml
+
+experiment:
+  name: asap1_cross_attention
+  output_dir: results/asap1
+  protocol: prompt_specific_5fold_60_20_20
+  seed: 42
+  prompt_id: 1
+  fold: 0
+
+data:
+  dataset: asap1
+  data_path: data/asap1/train.tsv
+  contexts_path: data/asap1/prompt_contexts.json
+  num_workers: 2
+  max_context_length: 768

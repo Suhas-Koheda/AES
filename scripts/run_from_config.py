@@ -56,6 +56,34 @@ def aggregate_seeds(seed_dirs: list[Path], out_path: Path) -> dict:
             "std": float(finite.std()) if finite.size else float("nan"),
             "n_defined": int(finite.size),
         }
+    # Preserve the existing prompt-wise evaluations in the aggregate so a
+    # multi-seed report can show variability for each official test prompt.
+    detailed_rows = []
+    for directory in seed_dirs:
+        results_path = directory / "results.json"
+        if results_path.exists():
+            with open(results_path, encoding="utf-8") as fh:
+                detailed_rows.append(json.load(fh))
+    prompt_ids = sorted({
+        str(prompt_id)
+        for row in detailed_rows
+        for prompt_id in row.get("test", {}).get("per_prompt", {})
+    })
+    if prompt_ids:
+        aggregate["per_prompt"] = {}
+        for prompt_id in prompt_ids:
+            aggregate["per_prompt"][prompt_id] = {}
+            for metric in ("qwk", "mae", "rmse", "accuracy", "pearson", "spearman"):
+                values = np.asarray([
+                    row.get("test", {}).get("per_prompt", {}).get(prompt_id, {}).get(metric, np.nan)
+                    for row in detailed_rows
+                ], dtype=np.float64)
+                finite = values[np.isfinite(values)]
+                aggregate["per_prompt"][prompt_id][metric] = {
+                    "mean": float(finite.mean()) if finite.size else float("nan"),
+                    "std": float(finite.std()) if finite.size else float("nan"),
+                    "n_defined": int(finite.size),
+                }
     aggregate["per_seed"] = rows
     save_json(aggregate, out_path)
     return aggregate

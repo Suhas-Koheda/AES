@@ -1,5 +1,37 @@
 # Dataset documentation — ASAP 2.0
 
+## ASAP 1.0 adapter
+
+The separate `src/asap1.py` adapter accepts the original ASAP 1.0 columns
+`essay_id`, `essay_set`, `essay`, and `domain1_score` (ID may be generated
+from row position if absent). Prompt IDs are 1–8. Published score bounds are
+P1 2–12, P2 1–6, P3/P4 0–3, P5/P6 0–4, P7 0–30, P8 0–60. The model's
+existing six-class head is retained: native scores are rounded to the nearest
+of six evenly spaced prompt-specific bins and predictions are inverse-mapped
+to native scores before metric calculation. The mapping is fixed from
+published bounds and does not inspect held-out examples. Since the inverse
+map cannot represent every native score on prompts with more than six levels,
+exact-score accuracy is a limited metric and this run is not directly
+comparable to models trained on unquantized native scores.
+
+The adapter requires source prompt/rubric context text in a JSON object keyed
+by prompt IDs `"1"` through `"8"`; no rubric is generated. The source dataset
+is a Kaggle competition release with random train/validation/test files. This
+implementation instead uses an explicitly documented, prompt-wise,
+score-stratified five-fold 60/20/20 protocol (test fold `i`, validation fold
+`(i+1) mod 5`). It is reproducible for a fixed seed but should not be
+represented as the Kaggle split. See `configs/asap1_cross_attention.yaml`.
+
+The original Kaggle ZIP is now available in the private repository as
+`asap1_kaggle.zip` and is
+ignored by Git. `scripts/prepare_asap1.py` extracts the 12,976 labeled
+training essays and all eight authentic prompt/rubric descriptions into the
+also-ignored `data/asap1/` directory. Its `valid_set.tsv` and `test_set.tsv`
+files contain no gold labels, so the reproducible evaluation uses five-fold
+cross-validation within the 12,976 labeled essays. The dataset page labels the
+archive “Subject to Competition Rules”; it is not redistributed in this
+repository. See `reports/benchmark_comparison.md` for evaluation status.
+
 Source: <https://github.com/scrosseye/ASAP_2.0> (CC BY 4.0).
 Paper: Crossley, Baffour, Burleigh & King (2025), *Assessing Writing* 65,
 100954, <https://doi.org/10.1016/j.asw.2025.100954>.

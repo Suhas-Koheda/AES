@@ -26,6 +26,11 @@ from .utils import ensure_dir, get_logger, progress, save_json, supports_amp
 logger = get_logger()
 
 
+def optimizer_update_succeeded(old_scale: float, new_scale: float) -> bool:
+    """GradScaler lowers its scale exactly when it skipped an optimizer step."""
+    return new_scale >= old_scale
+
+
 # --------------------------------------------------------------------------- #
 # Optimizer / scheduler
 # --------------------------------------------------------------------------- #
@@ -250,32 +255,45 @@ class Trainer:
                 k: v.to(self.device, non_blocking=True) if torch.is_tensor(v) else v
                 for k, v in batch.items()
             }
+            accumulation_start = (step // self.grad_accumulation) * self.grad_accumulation
+            accumulation_size = min(
+                self.grad_accumulation, len(train_loader) - accumulation_start
+            )
             with torch.amp.autocast(
                 device_type=self.device.type, enabled=self.fp16
             ):
                 outputs = self.model(batch)
                 loss, _ = self.loss_computer(outputs["logits"], batch["labels"])
-                scaled_loss = loss / self.grad_accumulation
+                scaled_loss = loss / accumulation_size
 
             if self.fp16:
                 self.scaler.scale(scaled_loss).backward()
             else:
                 scaled_loss.backward()
 
-            if (step + 1) % self.grad_accumulation == 0:
+            if (step + 1) % self.grad_accumulation == 0 or (step + 1) == len(train_loader):
                 if self.fp16:
                     self.scaler.unscale_(self.optimizer)
                 if self.max_grad_norm and self.max_grad_norm > 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 if self.fp16:
+                    old_scale = self.scaler.get_scale()
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
+                    # GradScaler skips optimizer.step() on non-finite gradients
+                    # and reduces its scale. The LR schedule must advance only
+                    # when weights were actually updated.
+                    optimizer_updated = optimizer_update_succeeded(
+                        old_scale, self.scaler.get_scale()
+                    )
                 else:
                     self.optimizer.step()
-                if self.scheduler_obj is not None:
+                    optimizer_updated = True
+                if self.scheduler_obj is not None and optimizer_updated:
                     self.scheduler_obj.step()
                 self.optimizer.zero_grad(set_to_none=True)
-                self.global_step += 1
+                if optimizer_updated:
+                    self.global_step += 1
 
                 if self.max_train_steps and self.global_step >= self.max_train_steps:
                     break

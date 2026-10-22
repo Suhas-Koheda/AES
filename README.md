@@ -22,6 +22,16 @@ the official archive already placed in `data/asap2_raw/`; for a fresh checkout,
 run it with `--download` to obtain the official source repository. The
 password-protected test archive is handled by the script.
 
+The repository also includes an ASAP 1.0 adapter and prompt-specific
+five-fold evaluation path. ASAP 1.0 requires the original labeled essays and
+genuine prompt/rubric context text supplied by the user. The adapter maps each
+prompt's published native score range to the existing six-class head, then
+decodes predictions to the native scale for metrics. This quantization means
+the ASAP 1.0 results are not strictly head-to-head with papers training and
+predicting directly on each native score scale. Details and current data
+availability are in [DATASET.md](DATASET.md) and
+[reports/benchmark_comparison.md](reports/benchmark_comparison.md).
+
 ## Setup and run
 
 ```bash
@@ -60,6 +70,44 @@ training history, metrics and per-example predictions under `results/<run>/`.
 The result includes QWK, Pearson, Spearman, MAE, RMSE and per-prompt and
 public/private breakdowns. Dataset files, checkpoints, and outputs are kept
 out of Git.
+
+## ASAP 1.0 reproduction
+
+The private repository includes `asap1_kaggle.zip`. After cloning it in an
+environment authorized to access the repository, prepare the local,
+Git-ignored files:
+
+```bash
+python scripts/prepare_asap1.py
+```
+
+The script extracts the labeled training TSV and the eight original prompt
+and rubric descriptions. It does not extract or use the unlabeled Kaggle
+validation/test essays as if they had gold scores. The adapter accepts the
+standard `essay_set`, `essay`, and `domain1_score` columns (or equivalent
+`prompt_id`, `full_text`, `score`). It applies prompt-specific score bounds
+and uses seeded score-stratified folds: for each of five folds, 60% train,
+20% validation, 20% test, within a single prompt. Fold `i` is test and fold
+`(i+1) mod 5` is validation. Run all prompts and folds with:
+
+```bash
+python scripts/run_asap1.py --config configs/asap1_cross_attention.yaml --seed 42
+```
+
+This is a documented five-fold cross-validation protocol, not the historical
+Kaggle random split. Outputs include per-fold native-scale predictions,
+metrics, checkpoints, and prompt-level means/std under `results/asap1/`.
+
+## ASAP 2.0 reproduction
+
+The official split has 17,307 training and 7,421 test essays. The 15%
+stratified validation carve-out is drawn only from the official training
+partition; the official test partition is not used for model selection.
+Reproduce the three-seed run with:
+
+```bash
+python scripts/run_from_config.py --config configs/cross_attention.yaml --seeds 42 43 44
+```
 
 ## Result status
 

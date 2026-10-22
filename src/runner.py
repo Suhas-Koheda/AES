@@ -78,6 +78,29 @@ def load_and_split(cfg: dict, root: Path):
     seed = int(deep_get(cfg, "experiment.seed", 42))
     val_fraction = float(data_cfg.get("val_fraction", 0.15))
 
+    if data_cfg.get("dataset") == "asap1":
+        from .asap1 import load_asap1, make_prompt_fold
+
+        asap1 = load_asap1(
+            _resolve(data_cfg.get("data_path"), root),
+            _resolve(data_cfg.get("contexts_path"), root),
+        )
+        prompt_id = int(deep_get(cfg, "experiment.prompt_id"))
+        fold = int(deep_get(cfg, "experiment.fold"))
+        train_split, val_split, test_split = make_prompt_fold(asap1, prompt_id, fold, seed)
+        manifest = type("ASAP1Manifest", (), {
+            "protocol": "prompt_specific_5fold_60_20_20",
+            "summary": lambda self, tr, va, te: {
+                "protocol": self.protocol, "seed": seed, "prompt_id": prompt_id,
+                "fold": fold, "train_n": len(tr), "val_n": len(va), "test_n": len(te),
+            },
+        })()
+        logger.info(
+            "ASAP 1.0 prompt %d fold %d: train=%d val=%d test=%d",
+            prompt_id, fold, len(train_split), len(val_split), len(test_split),
+        )
+        return train_split, val_split, test_split, manifest, None
+
     train_csv = _resolve(data_cfg.get("train_csv"), root)
     test_csv = _resolve(data_cfg.get("test_csv"), root)
     train_df, test_df = load_asap_data(train_csv, test_csv)
@@ -228,15 +251,23 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
     train_df, val_df, test_df, manifest, _ = load_and_split(cfg, root)
     save_split_manifest(train_df, val_df, test_df, manifest, out_dir)
 
-    rubric = load_rubric(_resolve(deep_get(cfg, "data.rubric_path"), root))
-    save_json(rubric.describe(), out_dir / "rubric.json")
+    if deep_get(cfg, "data.dataset") == "asap1":
+        rubric_text = ""
+        save_json({
+            "source": "prompt-specific text supplied in configured ASAP 1.0 context JSON",
+            "rubric_invented": False,
+        }, out_dir / "rubric.json")
+    else:
+        rubric = load_rubric(_resolve(deep_get(cfg, "data.rubric_path"), root))
+        rubric_text = rubric.full_text
+        save_json(rubric.describe(), out_dir / "rubric.json")
 
     tokenizer = build_tokenizer(cfg)
     collator = build_collator(cfg, tokenizer)
 
-    train_ds = EssayDataset(train_df, rubric.full_text)
-    val_ds = EssayDataset(val_df, rubric.full_text)
-    test_ds = EssayDataset(test_df, rubric.full_text)
+    train_ds = EssayDataset(train_df, rubric_text)
+    val_ds = EssayDataset(val_df, rubric_text)
+    test_ds = EssayDataset(test_df, rubric_text)
 
     num_workers = int(deep_get(cfg, "data.num_workers", 2))
     batch_size = int(deep_get(cfg, "train.batch_size", 16))
@@ -330,6 +361,19 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
             use_amp=bool(deep_get(cfg, "train.fp16", True)),
             desc=f"eval {split_name}",
         )
+        if deep_get(cfg, "data.dataset") == "asap1":
+            from .asap1 import restore_native_scores
+
+            # `predict` decodes the unchanged six-class head on its training
+            # scale. Report both truth and predictions on the native prompt
+            # score scale using the predeclared prompt bounds.
+            preds["true_score"] = df["raw_score"].astype(int).to_numpy()
+            # Decode positionally so each example uses its prompt's native
+            # score bounds.
+            preds["predicted_score"] = np.asarray([
+                restore_native_scores(int(prompt), [cls])[0]
+                for prompt, cls in zip(preds["prompt_names"], preds["predicted_class"])
+            ])
         metadata = df[[c for c in ["essay_id", "pubpriv"] + group_columns if c in df.columns]].copy()
         evaluation = evaluate_predictions(preds, metadata=metadata, group_columns=group_columns)
         save_evaluation(preds, evaluation, out_dir, split_name, metadata=metadata)

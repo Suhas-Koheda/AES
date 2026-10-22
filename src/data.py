@@ -434,7 +434,7 @@ class EssayDataset(Dataset):
             "question": str(row["assignment"]),
             "answer": str(row["full_text"]),
             "rubric": self.rubric_text,
-            "label": int(row["score"]) - 1,
+            "label": int(row["label"]) if "label" in row.index else int(row["score"]) - 1,
             "score": int(row["score"]),
             "prompt_name": prompt,
         }
