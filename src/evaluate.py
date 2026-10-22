@@ -110,6 +110,15 @@ def predictions_to_frame(preds: dict) -> pd.DataFrame:
     return frame
 
 
+def _metadata_for_merge(metadata: pd.DataFrame) -> pd.DataFrame:
+    """Normalize benchmark IDs so numeric source IDs match string batch IDs."""
+    result = metadata.copy()
+    if "essay_id" not in result.columns:
+        raise ValueError("metadata must contain essay_id")
+    result["essay_id"] = result["essay_id"].astype(str)
+    return result
+
+
 def evaluate_predictions(
     preds: dict,
     *,
@@ -141,7 +150,11 @@ def evaluate_predictions(
 
     if metadata is not None and group_columns:
         frame = predictions_to_frame(preds)
-        merged = frame.merge(metadata, on="essay_id", how="left", suffixes=("", "_meta"))
+        frame["essay_id"] = frame["essay_id"].astype(str)
+        merged = frame.merge(
+            _metadata_for_merge(metadata), on="essay_id", how="left",
+            suffixes=("", "_meta"),
+        )
         group_results = {}
         for column in group_columns:
             if column not in merged.columns:
@@ -174,6 +187,8 @@ def save_evaluation(
     out_dir = ensure_dir(out_dir)
     frame = predictions_to_frame(preds)
     if metadata is not None:
+        metadata = _metadata_for_merge(metadata)
+        frame["essay_id"] = frame["essay_id"].astype(str)
         merge_cols = ["essay_id"] + [
             c for c in metadata.columns if c != "essay_id" and c not in frame.columns
         ]

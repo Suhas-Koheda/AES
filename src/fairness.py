@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Optional
 import numpy as np
 import pandas as pd
 
-from .evaluate import predictions_to_frame
+from .evaluate import _metadata_for_merge, predictions_to_frame
 from .metrics import compute_metrics, to_plain_floats
 from .utils import ensure_dir, get_logger, save_json
 
@@ -76,6 +76,8 @@ def build_fairness_report(
 ) -> dict:
     """Compute subgroup metrics, score distributions and the worst errors."""
     frame = predictions_to_frame(preds)
+    frame["essay_id"] = frame["essay_id"].astype(str)
+    metadata = _metadata_for_merge(metadata)
     # ``frame`` already contains ``prompt_name``; merging it again would produce
     # prompt_name_x/prompt_name_y and break the per-prompt summary.
     merge_cols = ["essay_id"] + [
