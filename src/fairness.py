@@ -24,7 +24,8 @@ MIN_GROUP_SIZE_FOR_QWK = 50
 
 
 def _group_summary(
-    frame: pd.DataFrame, column: str, min_size: int
+    frame: pd.DataFrame, column: str, min_size: int,
+    metric_kwargs: Optional[dict] = None,
 ) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     values = frame[column].fillna("__missing__").astype(str)
@@ -42,6 +43,7 @@ def _group_summary(
         metrics = compute_metrics(
             frame.loc[mask, "true_score"].to_numpy(),
             frame.loc[mask, "predicted_score"].to_numpy(),
+            **(metric_kwargs or {}),
         )
         block.update(
             {
@@ -73,6 +75,7 @@ def build_fairness_report(
     *,
     min_group_size: int = MIN_GROUP_SIZE,
     n_worst: int = 50,
+    metric_kwargs: Optional[dict] = None,
 ) -> dict:
     """Compute subgroup metrics, score distributions and the worst errors."""
     frame = predictions_to_frame(preds)
@@ -90,7 +93,7 @@ def build_fairness_report(
         "n": int(len(frame)),
         "groups": {},
         "missing": {},
-        "per_prompt": _prompt_summary(frame),
+        "per_prompt": _prompt_summary(frame, metric_kwargs=metric_kwargs),
     }
 
     for column in group_columns:
@@ -98,7 +101,9 @@ def build_fairness_report(
             report["missing"][column] = "column absent from metadata"
             continue
         report["missing"][column] = int(frame[column].isna().sum())
-        report["groups"][column] = _group_summary(frame, column, min_group_size)
+        report["groups"][column] = _group_summary(
+            frame, column, min_group_size, metric_kwargs=metric_kwargs
+        )
 
     # Worst over- and under-scoring examples.
     error_frame = frame.copy()
@@ -124,7 +129,9 @@ def build_fairness_report(
     return to_plain_floats(report)
 
 
-def _prompt_summary(frame: pd.DataFrame) -> Dict[str, dict]:
+def _prompt_summary(
+    frame: pd.DataFrame, *, metric_kwargs: Optional[dict] = None
+) -> Dict[str, dict]:
     if "prompt_name" not in frame.columns:
         logger.warning("prompt_name missing from predictions/metadata; skipping per-prompt summary")
         return {}
@@ -134,6 +141,7 @@ def _prompt_summary(frame: pd.DataFrame) -> Dict[str, dict]:
         metrics = compute_metrics(
             frame.loc[mask, "true_score"].to_numpy(),
             frame.loc[mask, "predicted_score"].to_numpy(),
+            **(metric_kwargs or {}),
         )
         metrics.pop("confusion_matrix", None)
         out[str(prompt)] = to_plain_floats(metrics)

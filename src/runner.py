@@ -402,7 +402,9 @@ def run_neural(cfg: dict, root: Path, out_dir: Path) -> dict:
         logger.info("[%s] %s", split_name, summarise(evaluation))
 
         if split_name == "test":
-            fairness = build_fairness_report(preds, df, group_columns)
+            fairness = build_fairness_report(
+                preds, df, group_columns, metric_kwargs=metric_kwargs
+            )
             save_fairness_report(fairness, out_dir / "fairness")
 
     save_json(results, out_dir / "results.json")
